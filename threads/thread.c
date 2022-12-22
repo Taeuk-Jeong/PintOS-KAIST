@@ -28,6 +28,9 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* List of processes in sleep(bloced) state. */
+static struct list sleep_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -48,6 +51,8 @@ static long long user_ticks;    /* # of timer ticks in user programs. */
 /* Scheduling. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /* # of timer ticks since last yield. */
+
+static int64_t global_ticks = INT64_MAX;
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -108,6 +113,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&sleep_list);
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -587,4 +593,48 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+int64_t get_global_ticks (void) {
+	return global_ticks;
+}
+
+void set_global_ticks (int64_t ticks) {
+	if (ticks < global_ticks)
+		global_ticks = ticks;
+}
+
+void thread_sleep (int64_t ticks) {
+	struct thread *curr = thread_current ();
+	enum intr_level old_level;
+
+	ASSERT (!intr_context ());
+
+	old_level = intr_disable ();
+	if (curr != idle_thread)
+	{
+		curr->wakeup_tick = ticks;
+		list_push_back (&sleep_list, &curr->elem);
+		set_global_ticks (ticks);
+	}
+	do_schedule (THREAD_BLOCKED);
+	intr_set_level (old_level);
+}
+
+void thread_awake (int64_t ticks) {
+	struct thread *t;
+	struct list_elem *e = list_begin (&sleep_list);
+
+	set_global_ticks (INT64_MAX);
+
+	while (e != list_end (&sleep_list)) {
+		t = list_entry (e, struct thread, elem);
+		if (t->wakeup_tick <= ticks) { 
+			e = list_remove (e);
+			thread_unblock (t);
+		} else {
+			set_global_ticks (t->wakeup_tick);
+			e = list_next (e);
+		}
+	}
 }

@@ -92,6 +92,8 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	int64_t wakeup_tick;                /* Ticks for wake up (local ticks) */
+
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
@@ -142,5 +144,10 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+int64_t get_global_ticks (void);
+void set_global_ticks (int64_t ticks);
+void thread_sleep (int64_t ticks);
+void thread_awake (int64_t ticks);
 
 #endif /* threads/thread.h */
