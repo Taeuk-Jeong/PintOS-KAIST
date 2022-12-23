@@ -32,6 +32,9 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+static void donate_priority (void);
+static void remove_with_lock (struct lock *);
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -188,12 +191,20 @@ lock_init (struct lock *lock) {
    we need to sleep. */
 void
 lock_acquire (struct lock *lock) {
+	struct thread *curr = thread_current ();
+
 	ASSERT (lock != NULL);
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
+	if (lock->holder != NULL) {
+		curr->wait_on_lock = lock;
+		list_insert_ordered (&lock->holder->donations, &curr->d_elem, cmp_priority, NULL);
+		donate_priority ();
+	}
 	sema_down (&lock->semaphore);
-	lock->holder = thread_current ();
+	curr->wait_on_lock = NULL;
+	lock->holder = curr;
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -226,6 +237,8 @@ lock_release (struct lock *lock) {
 	ASSERT (lock != NULL);
 	ASSERT (lock_held_by_current_thread (lock));
 
+	remove_with_lock (lock);
+	refresh_priority ();
 	lock->holder = NULL;
 	sema_up (&lock->semaphore);
 }
@@ -324,4 +337,37 @@ cond_broadcast (struct condition *cond, struct lock *lock) {
 
 	while (!list_empty (&cond->waiters))
 		cond_signal (cond, lock);
+}
+
+static void
+donate_priority (void) {
+	struct thread *donor = thread_current ();
+	struct thread *acceptor = donor->wait_on_lock->holder;
+	
+	for (int nested_depth = 1; nested_depth <= 8; nested_depth++) {
+		if (acceptor->priority < donor->priority)
+			acceptor->priority = donor->priority;
+		else
+			break;
+
+		if (acceptor->wait_on_lock == NULL)
+			break;
+		else {
+			acceptor = acceptor->wait_on_lock->holder;
+		}
+	}
+}
+
+static void
+remove_with_lock (struct lock *lock) {
+	struct list_elem *e = list_begin (&lock->holder->donations);
+	struct thread *t;
+
+	while (e != list_end (&lock->holder->donations)) {
+		t = list_entry (e, struct thread, d_elem);
+		if (t->wait_on_lock == lock)
+			e = list_remove (e);
+		else
+			e = list_next (e);
+	}
 }

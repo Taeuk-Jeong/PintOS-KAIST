@@ -92,10 +92,16 @@ struct thread {
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
 
+	int priority_base;                  /* Base priority. */
+	struct lock *wait_on_lock;          /* Lock that have to be acquired. */
+
 	int64_t wakeup_tick;                /* Ticks for wake up (local ticks) */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+
+	struct list donations;              /* List of donors */
+	struct list_elem d_elem;            /* List element of donations. */
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -150,5 +156,6 @@ void set_global_ticks (int64_t);
 void thread_sleep (int64_t);
 void thread_awake (int64_t);
 bool cmp_priority (const struct list_elem *, const struct list_elem *, void *aux);
+void refresh_priority (void);
 
 #endif /* threads/thread.h */
