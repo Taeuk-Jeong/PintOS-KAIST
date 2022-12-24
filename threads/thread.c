@@ -652,9 +652,7 @@ void thread_awake (int64_t ticks) {
 
 bool
 cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
-	return list_entry (a, struct thread, elem)->priority \
-		> list_entry (b, struct thread, elem)->priority ? \
-		1 : 0; 
+	return list_entry (a, struct thread, elem)->priority > list_entry (b, struct thread, elem)->priority;
 }
 
 void
