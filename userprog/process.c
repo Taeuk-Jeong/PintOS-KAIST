@@ -429,7 +429,7 @@ load (const char *file_name, struct intr_frame *if_) {
 	argument_stack (if_, argc, argv);
 
 	/* Debugging purpose. */
-	hex_dump (if_->rsp, if_->rsp, USER_STACK - if_->rsp, true);
+	// hex_dump (if_->rsp, if_->rsp, USER_STACK - if_->rsp, true);
 
 	success = true;
 

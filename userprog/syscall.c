@@ -11,6 +11,10 @@
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
+void halt (void) NO_RETURN;
+void exit (int status) NO_RETURN;
+int write (int fd, const void *buffer, unsigned length);
+
 /* System call.
  *
  * Previously system call services was handled by the interrupt handler
@@ -40,7 +44,49 @@ syscall_init (void) {
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
-	// TODO: Your implementation goes here.
-	printf ("system call!\n");
+	/* When the system call handler syscall_handler() gets control,
+	 * the system call number is in the rax, and arguments are passed
+	 * with the order %rdi, %rsi, %rdx, %r10, %r8, and %r9. */
+
+	/* The x86-64 convention for function return values is to place them in the RAX register.
+	   System calls that return a value can do so by modifying the rax member of struct intr_frame. */
+	switch (f->R.rax) {
+		case SYS_HALT:
+			halt ();
+			break;
+		case SYS_EXIT:
+			exit (f->R.rdi);
+			break;
+		case SYS_WRITE:
+			f->R.rax = write (f->R.rdi, f->R.rsi, f->R.rdx);
+			break;
+		default:
+			exit (-1);
+			break;
+	}
+}
+
+/* Terminates PintOS */
+void
+halt (void) {
+	power_off ();
+}
+
+/* Terminates the current user program, returning STATUS to the kernel. 
+ * If the process's parent waits for it, this is the status that will be returned.
+ * Conventionally, a status of 0 indicates success and nonzero values indicate errors. */
+void
+exit (int status) {
+	struct thread *t = thread_current ();
+	printf ("%s: exit(%d)\n", t->name, status);
 	thread_exit ();
+}
+
+/* Writes SIZE(LENGTH) bytes from BUFFER to the open file FD. Returns the number of bytes actually written. */
+int
+write (int fd, const void *buffer, unsigned size) {
+	/* Test를 위한 기본 기능 */
+	if (fd == STDOUT_FILENO)
+		putbuf (buffer, size);
+	return size;
 }
