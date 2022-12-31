@@ -221,6 +221,7 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
+	palloc_free_page (curr->fdt);
 	process_cleanup ();
 }
 
