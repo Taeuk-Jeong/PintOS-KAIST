@@ -27,6 +27,9 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+static void argument_parse (char *file_name, int *argc_ptr, char *argv[]);
+static void argument_stack (struct intr_frame *if_, int argc, char *argv[]);
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -40,7 +43,7 @@ process_init (void) {
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t
 process_create_initd (const char *file_name) {
-	char *fn_copy;
+	char *fn_copy, *save_ptr;
 	tid_t tid;
 
 	/* Make a copy of FILE_NAME.
@@ -51,6 +54,7 @@ process_create_initd (const char *file_name) {
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
+	strtok_r (file_name, " ", &save_ptr);
 	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
@@ -201,9 +205,10 @@ process_exec (void *f_name) {
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
+	/* Temporary. */
+	for (int i = 0; i < 0x0fffffff; i++)
+		continue;
+
 	return -1;
 }
 
@@ -329,6 +334,12 @@ load (const char *file_name, struct intr_frame *if_) {
 	bool success = false;
 	int i;
 
+	int argc = 0;
+	char *argv[128];
+
+	/* Argument parsing. */
+	argument_parse (file_name, &argc, argv);
+
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
 	if (t->pml4 == NULL)
@@ -414,8 +425,11 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	/* Argument passing. */
+	argument_stack (if_, argc, argv);
+
+	/* Debugging purpose. */
+	hex_dump (if_->rsp, if_->rsp, USER_STACK - if_->rsp, true);
 
 	success = true;
 
@@ -568,6 +582,50 @@ install_page (void *upage, void *kpage, bool writable) {
 	 * address, then map our page there. */
 	return (pml4_get_page (t->pml4, upage) == NULL
 			&& pml4_set_page (t->pml4, upage, kpage, writable));
+}
+
+/* Parse command line by tokenizing command line into arguments */
+static void
+argument_parse (char *file_name, int *argc_ptr, char *argv[]) {
+	char *token, *save_ptr;
+
+	for (token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+        argv[(*argc_ptr)++] = token;
+
+	argv[*argc_ptr] = token; // NULL
+}
+
+/* Pass the arguments to the user program by pushing to the user stack */
+static void
+argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
+	char *argv_addr[128];
+
+	/* Argument(string). */
+	for (int i = argc - 1; i >= 0; i--) {
+		if_->rsp -= strlen (argv[i]) + 1;
+		memcpy (if_->rsp, argv[i], strlen (argv[i]) + 1);
+		argv_addr[i] = if_->rsp;
+	}
+
+	/* Padding(8 byte word-align). */
+	while (if_->rsp % 8 != 0) {
+		if_->rsp--;
+		*(uint8_t *) (if_->rsp) = 0x00;
+	}
+
+	/* Argument's address. */
+	for (int i = argc; i >= 0; i--) {
+		if_->rsp -= sizeof (uintptr_t *);
+		*(uintptr_t *) if_->rsp = argv_addr[i];
+	}
+
+	/* Point rsi to argv (the address of argv[0]) and set %rdi to argc. */
+	if_->R.rsi = if_->rsp; 
+	if_->R.rdi = argc;
+
+	/* Fake return address. */
+	if_->rsp -= sizeof (uintptr_t *);
+	*(uintptr_t *) if_->rsp = NULL;
 }
 #else
 /* From here, codes will be used after project 3.

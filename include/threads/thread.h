@@ -95,12 +95,12 @@ struct thread {
 	int priority_base;                  /* Base priority. */
 	struct lock *wait_on_lock;          /* Lock that have to be acquired. */
 
-	int64_t wakeup_tick;                /* Ticks for wake up (local ticks) */
+	int64_t wakeup_tick;                /* Ticks for wake up (local ticks). */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
 
-	struct list donations;              /* List of donors */
+	struct list donations;              /* List of donors. */
 	struct list_elem d_elem;            /* List element of donations. */
 
 #ifdef USERPROG
