@@ -5,6 +5,11 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#ifdef USERPROG
+#define FDT_PAGES 3
+#define FDT_COUNT_LIMIT (1<<9)*FDT_PAGES /* Limit of file descriptor index: 1<<12(PGSIZE, 4 KB)*3 / 1<<3(size of pointer, 8 Bytes) */
+#include "synch.h"
+#endif
 #ifdef VM
 #include "vm/vm.h"
 #endif

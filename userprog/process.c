@@ -221,7 +221,7 @@ process_exit (void) {
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
 
-	palloc_free_page (curr->fdt);
+	palloc_free_multiple (curr->fdt, FDT_PAGES);
 	process_cleanup ();
 }
 
@@ -584,50 +584,6 @@ install_page (void *upage, void *kpage, bool writable) {
 	return (pml4_get_page (t->pml4, upage) == NULL
 			&& pml4_set_page (t->pml4, upage, kpage, writable));
 }
-
-/* Parse command line by tokenizing command line into arguments */
-static void
-argument_parse (char *file_name, int *argc_ptr, char *argv[]) {
-	char *token, *save_ptr;
-
-	for (token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
-        argv[(*argc_ptr)++] = token;
-
-	argv[*argc_ptr] = token; // NULL
-}
-
-/* Pass the arguments to the user program by pushing to the user stack */
-static void
-argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
-	char *argv_addr[128];
-
-	/* Argument(string). */
-	for (int i = argc - 1; i >= 0; i--) {
-		if_->rsp -= strlen (argv[i]) + 1;
-		memcpy (if_->rsp, argv[i], strlen (argv[i]) + 1);
-		argv_addr[i] = if_->rsp;
-	}
-
-	/* Padding(8 byte word-align). */
-	while (if_->rsp % 8 != 0) {
-		if_->rsp--;
-		*(uint8_t *) (if_->rsp) = 0x00;
-	}
-
-	/* Argument's address. */
-	for (int i = argc; i >= 0; i--) {
-		if_->rsp -= sizeof (uintptr_t *);
-		*(uintptr_t *) if_->rsp = argv_addr[i];
-	}
-
-	/* Point rsi to argv (the address of argv[0]) and set %rdi to argc. */
-	if_->R.rsi = if_->rsp; 
-	if_->R.rdi = argc;
-
-	/* Fake return address. */
-	if_->rsp -= sizeof (uintptr_t *);
-	*(uintptr_t *) if_->rsp = NULL;
-}
 #else
 /* From here, codes will be used after project 3.
  * If you want to implement the function for only project 2, implement it on the
@@ -696,3 +652,47 @@ setup_stack (struct intr_frame *if_) {
 	return success;
 }
 #endif /* VM */
+
+/* Parse command line by tokenizing command line into arguments */
+static void
+argument_parse (char *file_name, int *argc_ptr, char *argv[]) {
+	char *token, *save_ptr;
+
+	for (token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+        argv[(*argc_ptr)++] = token;
+
+	argv[*argc_ptr] = token; // NULL
+}
+
+/* Pass the arguments to the user program by pushing to the user stack */
+static void
+argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
+	char *argv_addr[128];
+
+	/* Argument(string). */
+	for (int i = argc - 1; i >= 0; i--) {
+		if_->rsp -= strlen (argv[i]) + 1;
+		memcpy (if_->rsp, argv[i], strlen (argv[i]) + 1);
+		argv_addr[i] = if_->rsp;
+	}
+
+	/* Padding(8 byte word-align). */
+	while (if_->rsp % 8 != 0) {
+		if_->rsp--;
+		*(uint8_t *) (if_->rsp) = 0x00;
+	}
+
+	/* Argument's address. */
+	for (int i = argc; i >= 0; i--) {
+		if_->rsp -= sizeof (uintptr_t *);
+		*(uintptr_t *) if_->rsp = argv_addr[i];
+	}
+
+	/* Point rsi to argv (the address of argv[0]) and set %rdi to argc. */
+	if_->R.rsi = if_->rsp; 
+	if_->R.rdi = argc;
+
+	/* Fake return address. */
+	if_->rsp -= sizeof (uintptr_t *);
+	*(uintptr_t *) if_->rsp = NULL;
+}

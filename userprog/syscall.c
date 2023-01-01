@@ -8,17 +8,13 @@
 #include "threads/flags.h"
 #include "intrinsic.h"
 
-#include "filesys/file.h"
 #include "filesys/filesys.h"
-
-#define FDT_COUNT_LIMIT (1<<9) /* Limit of file descriptor index: 1<<12(PGSIZE, 4 KB) / 1<<3(size of pointer, 8 Bytes) */
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
-void halt (void) NO_RETURN;
-void exit (int status) NO_RETURN;
-int write (int fd, const void *buffer, unsigned length);
+void halt (void);
+void exit (int status);
 bool create (const char *file, unsigned initial_size);
 bool remove (const char *file);
 int open (const char *file);
@@ -33,6 +29,8 @@ static void check_address (void *addr);
 static int fdt_add_fd (struct file *file);
 static struct file* fdt_get_file (int fd);
 static void fdt_remove_fd (int fd);
+
+static struct lock filesys_lock;
 
 /* System call.
  *
@@ -58,6 +56,8 @@ syscall_init (void) {
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
 			FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
+
+	lock_init (&filesys_lock);
 }
 
 /* The main system call interface */
@@ -120,8 +120,7 @@ halt (void) {
  * Conventionally, a status of 0 indicates success and nonzero values indicate errors. */
 void
 exit (int status) {
-	struct thread *t = thread_current ();
-	printf ("%s: exit(%d)\n", t->name, status);
+	printf ("%s: exit(%d)\n", thread_name (), status);
 	thread_exit ();
 }
 
@@ -147,15 +146,17 @@ int
 open (const char *file) {
 	check_address (file);
 
-	struct file *f = filesys_open (file);
+	lock_acquire (&filesys_lock);
 
+	struct file *f = filesys_open (file);
 	if (f == NULL)
 		return -1;
 
 	int fd = fdt_add_fd (f);
-
 	if (fd == -1)
 		file_close (f);
+
+	lock_release (&filesys_lock);
 
 	return fd;
 }
@@ -197,8 +198,10 @@ read (int fd, void *buffer, unsigned size) {
 
 		if (f == NULL)
 			return -1;
-	
+
+		lock_acquire (&filesys_lock);
 		size_read = file_read (f, buffer, size);
+		lock_release (&filesys_lock);
 	}
 
 	return size_read;
@@ -222,8 +225,10 @@ write (int fd, const void *buffer, unsigned size) {
 
 		if (f == NULL)
 			return -1;
-	
+
+		lock_acquire (&filesys_lock);
 		size_written = file_write (f, buffer, size);
+		lock_release (&filesys_lock);
 	}
 
 	return size_written;
@@ -248,7 +253,7 @@ tell (int fd) {
 
 	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || f == NULL)
 		return;
-	
+
 	return file_tell (f);
 }
 
