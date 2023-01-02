@@ -9,12 +9,16 @@
 #include "intrinsic.h"
 
 #include "filesys/filesys.h"
+#include "threads/palloc.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
 void halt (void);
 void exit (int status);
+tid_t fork (const char *thread_name);
+int exec (const char *file);
+int wait (tid_t);
 bool create (const char *file, unsigned initial_size);
 bool remove (const char *file);
 int open (const char *file);
@@ -76,6 +80,17 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_EXIT:
 			exit (f->R.rdi);
 			break;
+		case SYS_FORK:
+			memcpy (&thread_current ()->parent_if, f, sizeof (struct intr_frame));
+			f->R.rax = fork (f->R.rdi);
+			break;
+		case SYS_EXEC:
+			if (exec (f->R.rdi) == -1)
+				exit (-1);
+			break;
+		case SYS_WAIT:
+			f->R.rax = wait (f->R.rdi);
+			break;
 		case SYS_CREATE:
 			f->R.rax = create (f->R.rdi, f->R.rsi);
 			break;
@@ -120,6 +135,7 @@ halt (void) {
  * Conventionally, a status of 0 indicates success and nonzero values indicate errors. */
 void
 exit (int status) {
+	thread_current ()->exit_status = status;
 	printf ("%s: exit(%d)\n", thread_name (), status);
 	thread_exit ();
 }
@@ -129,6 +145,36 @@ bool
 create (const char *file, unsigned initial_size) {
 	check_address (file);
 	return filesys_create (file, initial_size);
+}
+
+/* Create new process which is the clone of current process with the name THREAD_NAME. */
+tid_t
+fork (const char *thread_name) {
+	check_address (thread_name);
+	return process_fork (thread_name, thread_current ()->parent_if);
+}
+
+/* Change current process to the executable whose name is given in CMD_LINE,
+ * passing any given arguments. This never returns if successful.
+ * Otherwise the process terminates with exit state -1, if the program cannot load or run for any reason.
+ * This function does not change the name of the thread that called exec. Please note that file descriptors remain open across an exec call. */
+int
+exec (const char *cmd_line) {
+	check_address (cmd_line);
+
+	char *fn_copy = palloc_get_page (0);
+	if (fn_copy == NULL)
+		return -1;
+	strlcpy (fn_copy, cmd_line, PGSIZE);
+
+	if (process_exec (fn_copy) < 0)
+		return -1;
+}
+
+/* Wait for termination of child process whose process id is TID(PID) */
+int
+wait (tid_t tid) {
+	return process_wait (tid);
 }
 
 /* Deletes the file called FILE. Returns true if successful, false otherwise.

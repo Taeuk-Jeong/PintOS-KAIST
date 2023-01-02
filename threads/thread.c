@@ -208,6 +208,9 @@ thread_create (const char *name, int priority,
 	/* Initialize file descriptor table. */
 	t->fdt[0] = t->fdt[1] = 1; /* Dummy value for standard input/output fd(0/1). */
 	t->fdx = 2;                /* Minimum of usable FD. */
+
+	/* Add new process to child process list of running thread. */
+	list_push_back (&thread_current ()->child_list, &t->child_elem);
 #endif
 
 	/* Call the kernel_thread if it scheduled.
@@ -436,6 +439,14 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->priority_base = priority;
 	t->wait_on_lock = NULL;
 	list_init (&t->donations);
+#ifdef USERPROG
+	list_init (&t->child_list);
+	t->running = NULL;
+	t->exit_status = 0;
+	sema_init (&t->fork_sema, 0);
+	sema_init (&t->wait_sema, 0);
+	sema_init (&t->free_sema, 0);
+#endif
 	t->magic = THREAD_MAGIC;
 }
 

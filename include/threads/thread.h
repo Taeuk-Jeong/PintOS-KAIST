@@ -114,6 +114,19 @@ struct thread {
 	
 	struct file **fdt;                  /* File descriptor table. */
 	int fdx;                            /* File descriptor index(minimum usable FD, next fd). */
+
+	struct intr_frame parent_if;        /* Interrupt frame of parent process. */
+
+	struct list child_list;             /* List of child process. */
+	struct list_elem child_elem;        /* List element of child_list. */
+
+	struct file *running;               /* Running file. */
+
+	int exit_status;                    /* Status when user program terminate. */
+
+	struct semaphore fork_sema;         /* For waiting for completion of fork. */
+	struct semaphore wait_sema;         /* For waiting for termination of child process. */
+	struct semaphore free_sema;         /* For waiting until parent process wake up and get child process's exit_status. */
 #endif
 #ifdef VM
 	/* Table for whole virtual memory owned by thread. */
