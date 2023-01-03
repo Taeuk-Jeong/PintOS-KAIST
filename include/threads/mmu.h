@@ -32,4 +32,4 @@ struct desc_ptr {
 	uint64_t address;
 } __attribute__((packed));
 
-#endif /* thread/mm.h */
+#endif /* threads/mmu.h */

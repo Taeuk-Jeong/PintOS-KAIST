@@ -32,10 +32,10 @@
 #define pg_round_down(va) (void *) ((uint64_t) (va) & ~PGMASK)
 
 /* Kernel virtual address start */
-#define KERN_BASE LOADER_KERN_BASE
+#define KERN_BASE LOADER_KERN_BASE // 512 GB
 
 /* User stack start */
-#define USER_STACK 0x47480000
+#define USER_STACK 0x47480000 // about 1.1 GB
 
 /* Returns true if VADDR is a user virtual address. */
 #define is_user_vaddr(vaddr) (!is_kernel_vaddr((vaddr)))

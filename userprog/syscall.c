@@ -8,8 +8,17 @@
 #include "threads/flags.h"
 #include "intrinsic.h"
 
+#include "lib/string.h"
+#include "threads/init.h"
 #include "filesys/filesys.h"
+#include "userprog/process.h"
 #include "threads/palloc.h"
+#include "filesys/file.h"
+#include "lib/stdio.h"
+#include "devices/input.h"
+#include "lib/kernel/stdio.h"
+#include "threads/vaddr.h"
+#include "threads/mmu.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -33,8 +42,6 @@ static void check_address (void *addr);
 static int fdt_add_fd (struct file *file);
 static struct file* fdt_get_file (int fd);
 static void fdt_remove_fd (int fd);
-
-static struct lock filesys_lock;
 
 /* System call.
  *
@@ -60,8 +67,6 @@ syscall_init (void) {
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
 			FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
-
-	lock_init (&filesys_lock);
 }
 
 /* The main system call interface */
@@ -144,14 +149,19 @@ exit (int status) {
 bool
 create (const char *file, unsigned initial_size) {
 	check_address (file);
-	return filesys_create (file, initial_size);
+
+	filesys_acquire ();
+	bool result = filesys_create (file, initial_size);
+	filesys_release ();
+
+	return result;
 }
 
 /* Create new process which is the clone of current process with the name THREAD_NAME. */
 tid_t
 fork (const char *thread_name) {
 	check_address (thread_name);
-	return process_fork (thread_name, thread_current ()->parent_if);
+	return process_fork (thread_name, NULL);
 }
 
 /* Change current process to the executable whose name is given in CMD_LINE,
@@ -182,7 +192,12 @@ wait (tid_t tid) {
 bool
 remove (const char *file) {
 	check_address (file);
-	return filesys_remove (file);
+
+	filesys_acquire ();
+	bool result = filesys_remove (file);
+	filesys_release ();
+
+	return result;
 }
 
 /* Opens the file called FILE. Returns a nonnegative integer handle called a "file descriptor" (fd),
@@ -192,9 +207,9 @@ int
 open (const char *file) {
 	check_address (file);
 
-	lock_acquire (&filesys_lock);
-
+	filesys_acquire ();
 	struct file *f = filesys_open (file);
+	filesys_release ();
 	if (f == NULL)
 		return -1;
 
@@ -202,7 +217,6 @@ open (const char *file) {
 	if (fd == -1)
 		file_close (f);
 
-	lock_release (&filesys_lock);
 
 	return fd;
 }
@@ -245,9 +259,7 @@ read (int fd, void *buffer, unsigned size) {
 		if (f == NULL)
 			return -1;
 
-		lock_acquire (&filesys_lock);
 		size_read = file_read (f, buffer, size);
-		lock_release (&filesys_lock);
 	}
 
 	return size_read;
@@ -272,9 +284,7 @@ write (int fd, const void *buffer, unsigned size) {
 		if (f == NULL)
 			return -1;
 
-		lock_acquire (&filesys_lock);
 		size_written = file_write (f, buffer, size);
-		lock_release (&filesys_lock);
 	}
 
 	return size_written;

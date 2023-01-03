@@ -28,7 +28,7 @@ static void initd (void *f_name);
 static void __do_fork (void *);
 
 static void argument_parse (char *file_name, int *argc_ptr, char *argv[]);
-static void argument_stack (struct intr_frame *if_, int argc, char *argv[]);
+static bool argument_stack (struct intr_frame *if_, int argc, char *argv[]);
 static struct thread *get_child_process (int child_tid);
 
 /* General process initializer for initd and other process. */
@@ -84,9 +84,9 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 	if (child_tid == TID_ERROR)
 		return TID_ERROR;
 
-	struct thread *child = get_child_process(child_tid);
-	sema_down(&child->fork_sema); // wait until child loads
-	if (child->exit_status == -1)
+	struct thread *child = get_child_process (child_tid);
+	sema_down (&child->fork_sema); // wait until child loads
+	if (child->exit_status == TID_ERROR)
 		return TID_ERROR;
 
 	return child_tid;
@@ -222,10 +222,8 @@ process_exec (void *f_name) {
  * exception), returns -1.  If TID is invalid or if it was not a
  * child of the calling process, or if process_wait() has already
  * been successfully called for the given TID, returns -1
- * immediately, without waiting.
- *
- * This function will be implemented in problem 2-2.  For now, it
- * does nothing. */
+ * immediately, without waiting. */
+int
 process_wait (tid_t child_tid UNUSED) {
 	struct thread *child = get_child_process (child_tid);
 
@@ -246,7 +244,7 @@ process_exit (void) {
 	struct thread *curr = thread_current ();
 
 	for (int fd = 2; fd < FDT_COUNT_LIMIT; fd++)
-		close (fd);
+		file_close (curr->fdt[fd]);
 
 	palloc_free_multiple (curr->fdt, FDT_PAGES);
 	file_close (curr->running);
@@ -367,7 +365,9 @@ load (const char *file_name, struct intr_frame *if_) {
 	int i;
 
 	int argc = 0;
-	char *argv[128];
+	char **argv = palloc_get_page (PAL_USER);
+	if (argv == NULL)
+		goto done;
 
 	/* Argument parsing. */
 	argument_parse (file_name, &argc, argv);
@@ -379,7 +379,9 @@ load (const char *file_name, struct intr_frame *if_) {
 	process_activate (thread_current ());
 
 	/* Open executable file. */
+	filesys_acquire ();
 	t->running = file = filesys_open (file_name);
+	filesys_release ();
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
@@ -460,7 +462,8 @@ load (const char *file_name, struct intr_frame *if_) {
 	if_->rip = ehdr.e_entry;
 
 	/* Argument passing. */
-	argument_stack (if_, argc, argv);
+	if (!argument_stack (if_, argc, argv))
+		goto done;
 
 	/* Debugging purpose. */
 	// hex_dump (if_->rsp, if_->rsp, USER_STACK - if_->rsp, true);
@@ -469,6 +472,7 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
 	/* We arrive here whether the load is successful or not. */
+	palloc_free_page (argv);
 	return success;
 }
 
@@ -687,7 +691,7 @@ setup_stack (struct intr_frame *if_) {
 
 /* Parse command line by tokenizing command line into arguments */
 static void
-argument_parse (char *file_name, int *argc_ptr, char *argv[]) {
+argument_parse (char *file_name, int *argc_ptr, char **argv) {
 	char *token, *save_ptr;
 
 	for (token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
@@ -697,9 +701,11 @@ argument_parse (char *file_name, int *argc_ptr, char *argv[]) {
 }
 
 /* Pass the arguments to the user program by pushing to the user stack */
-static void
-argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
-	char *argv_addr[128];
+static bool
+argument_stack (struct intr_frame *if_, int argc, char **argv) {
+	char **argv_addr = palloc_get_page (PAL_USER);
+	if (argv_addr == NULL)
+		return false;
 
 	/* Argument(string). */
 	for (int i = argc - 1; i >= 0; i--) {
@@ -710,12 +716,16 @@ argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
 
 	/* Padding(8 byte word-align). */
 	while (if_->rsp % 8 != 0) {
-		if_->rsp--;
+		if_->rsp -= sizeof (uint8_t);
 		*(uint8_t *) (if_->rsp) = 0x00;
 	}
 
+	/* Null pointer sentinel */
+	if_->rsp -= sizeof (uintptr_t *);
+	*(uintptr_t *) if_->rsp = argv[argc]; // NULL
+
 	/* Argument's address. */
-	for (int i = argc; i >= 0; i--) {
+	for (int i = argc - 1; i >= 0; i--) {
 		if_->rsp -= sizeof (uintptr_t *);
 		*(uintptr_t *) if_->rsp = argv_addr[i];
 	}
@@ -727,6 +737,9 @@ argument_stack (struct intr_frame *if_, int argc, char *argv[]) {
 	/* Fake return address. */
 	if_->rsp -= sizeof (uintptr_t *);
 	*(uintptr_t *) if_->rsp = NULL;
+
+	palloc_free_page (argv_addr);
+	return true;
 }
 
 /* Get process discriptor that have TID. */
