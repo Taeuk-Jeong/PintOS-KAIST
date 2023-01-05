@@ -201,15 +201,6 @@ thread_create (const char *name, int priority,
 	tid = t->tid = allocate_tid ();
 
 #ifdef USERPROG
-	/* Allocate file descriptor table. */
-	t->fdt = palloc_get_multiple (PAL_ZERO, FDT_PAGES);
-	if (t->fdt == NULL)
-		return TID_ERROR;
-
-	/* Initialize file descriptor table. */
-	t->fdt[0] = t->fdt[1] = 1; /* Dummy value for standard input/output fd(0/1). */
-	t->fdx = 2;                /* Minimum of usable FD. */
-
 	/* Allocate struct wait_status. */
 	struct wait_status *w;
 
@@ -454,6 +445,11 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->priority_base = priority;
 	list_init (&t->donations);
 #ifdef USERPROG
+	/* Initialize file descriptor table. */
+	list_init (&t->fdt.fd_list);
+	t->fdt.next_fd = 2; // 0 = STDIN, 1 = STDOUT
+	t->fdt.open_cnt = 2;
+
 	sema_init (&t->fork_sema, 0);
 	list_init (&t->children);
 #endif

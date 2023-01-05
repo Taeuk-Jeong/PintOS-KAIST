@@ -163,21 +163,28 @@ __do_fork (void *aux) {
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-
-	if (parent->fdx == FDT_COUNT_LIMIT)
+	if (parent->fdt.next_fd == FD_LIMIT || parent->fdt.open_cnt == FILE_OPEN_LIMIT)
 		goto error;
 
 	/* Duplicate file descriptor table of parent process. */
-	for (int fd = 2; fd < FDT_COUNT_LIMIT; fd++) {
-		struct file *file = parent->fdt[fd];
-		if (file)
-			current->fdt[fd] = file_duplicate (file);
-	}
-	current->fdx = parent->fdx;
+	struct list *fd_list_parent = &parent->fdt.fd_list;
+	struct fd_str *fdstr_parent;
+	struct list *fd_list_current = &current->fdt.fd_list;
+	struct fd_str *fdstr_current;
 
-	process_init ();
+	for (struct list_elem *e = list_begin (fd_list_parent); e != list_end (fd_list_parent); e = list_next (e)) {
+		fdstr_parent = list_entry (e, struct fd_str, f_elem);
+		fdstr_current = calloc (1, sizeof (struct fd_str));
+		fdstr_current->fd = fdstr_parent->fd;
+		fdstr_current->file = file_duplicate (fdstr_parent->file);
+		list_push_back (fd_list_current, &fdstr_current->f_elem);
+	}
+	current->fdt.next_fd = parent->fdt.next_fd;
+	current->fdt.open_cnt = parent->fdt.open_cnt;
 
 	sema_up (&current->fork_sema);
+
+	process_init ();
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
@@ -252,12 +259,19 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+	struct list_elem *e;
+	struct fd_str *fdstr;
 	struct wait_status *w = curr->wait_status;
+	struct wait_status *w_child;
 
-	for (int fd = 2; fd < FDT_COUNT_LIMIT; fd++)
-		file_close (curr->fdt[fd]);
+	e = list_begin (&curr->fdt.fd_list);
+	while (e != list_end (&curr->fdt.fd_list)) {
+		fdstr = list_entry (e, struct fd_str, f_elem);
+		e = list_next (e);
+		file_close (fdstr->file);
+		free (fdstr);
+	}
 
-	palloc_free_multiple (curr->fdt, FDT_PAGES);
 	file_close (curr->running);
 	process_cleanup ();
 
@@ -274,9 +288,7 @@ process_exit (void) {
 		sema_up (&w->wait_sema);
 
 	/* Iterate the list of children and, as in the previous step. */
-	struct list_elem *e = list_begin (&curr->children);
-	struct wait_status *w_child;
-
+	e = list_begin (&curr->children);
 	while (e != list_end (&curr->children)) {
 		w_child = list_entry (e, struct wait_status, w_elem);
 		/* mark them as no longer used by us */

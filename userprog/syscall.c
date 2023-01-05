@@ -218,7 +218,6 @@ open (const char *file) {
 	if (fd == -1)
 		file_close (f);
 
-
 	return fd;
 }
 
@@ -346,47 +345,65 @@ check_address (void *addr) {
 /* Add file(FILE) to file descriptor table of running thread */
 static int
 fdt_add_fd (struct file *file) {
-	struct thread *t = thread_current ();
-	struct file **fdt = t->fdt;
-	int fd = t->fdx;
+	struct fd_table *fdt = &thread_current ()->fdt;
+	struct fd_str *fdstr;
 
-	/* When FDT is full. */
-	if (fd == FDT_COUNT_LIMIT)
+	/* Number of files opened or FD used is limited. */
+	if (fdt->open_cnt == FILE_OPEN_LIMIT || fdt->next_fd == FD_LIMIT)
 		return -1;
 
-	/* Set file descriptor. */
-	fdt[fd] = file;
-	
-	/* Find FD of next-open file(minimum usable fd). */
-	for (; t->fdx < FDT_COUNT_LIMIT; t->fdx++)
-		if (fdt[t->fdx] == NULL)
-			break;
+	/* Allocate file descriptor. */
+	fdstr = calloc (1, sizeof (struct fd_str));
 
-	return fd;
+	/* Set file descriptor. */
+	fdstr->fd = fdt->next_fd++;
+	fdstr->file = file;
+	list_push_back (&fdt->fd_list, &fdstr->f_elem);
+	fdt->open_cnt++;
+
+	return fdstr->fd;
 }
 
 /* Get pointer of file object from file descriptor(FD) */
 static struct file*
 fdt_get_file (int fd) {
-	struct thread *t = thread_current ();
+	struct fd_table *fdt = &thread_current ()->fdt;
+	struct list *fd_list = &fdt->fd_list;
+	struct fd_str *fdstr;
 
-	if (!(0 <= fd && fd < FDT_COUNT_LIMIT))
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd >= fdt->next_fd)
 		return NULL;
 
-	return t->fdt[fd];
+	for (struct list_elem *e = list_begin (fd_list); e != list_end (fd_list); e = list_next (e)) {
+		fdstr = list_entry (e, struct fd_str, f_elem);
+		if (fdstr->fd == fd)
+			return fdstr->file;
+		else if (fdstr->fd > fd)
+			return NULL;
+	}
+
+	return NULL;
 }
 
 /* When file is closed, set 0 at file descriptor entry at index fd */
 static void
 fdt_remove_fd (int fd) {
-	struct thread *t = thread_current ();
+	struct fd_table *fdt = &thread_current ()->fdt;
+	struct list *fd_list = &fdt->fd_list;
+	struct fd_str *fdstr;
 
-	if (!(0 <= fd && fd < FDT_COUNT_LIMIT))
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd >= fdt->next_fd)
 		return;
 
-	t->fdt[fd] = NULL;
-
-	/* Reset minimum usable fd if needed */
-	if (t->fdx > fd)
-		t->fdx = fd;
+	for (struct list_elem *e = list_begin (fd_list); e != list_end (fd_list); e = list_next (e)) {
+		fdstr = list_entry (e, struct fd_str, f_elem);
+		if (fdstr->fd == fd) {
+			fdt->open_cnt--;
+			list_remove (e);
+			free (fdstr);
+			return;
+		} else if (fdstr->fd > fd) {
+			return;
+		}
+	}
 }
