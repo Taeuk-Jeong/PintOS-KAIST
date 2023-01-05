@@ -202,7 +202,7 @@ lock_acquire (struct lock *lock) {
 	ASSERT (!intr_context ());
 	ASSERT (!lock_held_by_current_thread (lock));
 
-	if (lock->holder != NULL) {
+	if (lock->holder) {
 		curr->wait_on_lock = lock;
 		list_insert_ordered (&lock->holder->donations, &curr->d_elem, cmp_priority, NULL);
 		donate_priority ();
@@ -363,11 +363,10 @@ donate_priority (void) {
 		else
 			break;
 
-		if (acceptor->wait_on_lock == NULL)
-			break;
-		else {
+		if (acceptor->wait_on_lock != NULL)
 			acceptor = acceptor->wait_on_lock->holder;
-		}
+		else
+			break;
 	}
 }
 

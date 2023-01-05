@@ -18,6 +18,8 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "threads/synch.h"
+#include "threads/malloc.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -27,9 +29,10 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
-static void argument_parse (char *file_name, int *argc_ptr, char *argv[]);
-static bool argument_stack (struct intr_frame *if_, int argc, char *argv[]);
+static void argument_parse (char *file_name, int *argc_ptr, char **argv);
+static bool argument_stack (struct intr_frame *if_, int argc, char **argv);
 static struct thread *get_child_process (int child_tid);
+static struct wait_status *get_child_wait_status (int child_tid);
 
 /* General process initializer for initd and other process. */
 static void
@@ -86,7 +89,7 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 
 	struct thread *child = get_child_process (child_tid);
 	sema_down (&child->fork_sema); // wait until child loads
-	if (child->exit_status == TID_ERROR)
+	if (child->wait_status->exit_status == TID_ERROR)
 		return TID_ERROR;
 
 	return child_tid;
@@ -139,7 +142,7 @@ __do_fork (void *aux) {
 	struct intr_frame if_;
 	struct thread *parent = (struct thread *) aux;
 	struct thread *current = thread_current ();
-	struct intr_frame *parent_if = &parent->parent_if;
+	struct intr_frame *parent_if = &parent->user_if;
 	bool succ = true;
 
 	/* 1. Read the cpu context to local stack. */
@@ -167,15 +170,14 @@ __do_fork (void *aux) {
 	/* Duplicate file descriptor table of parent process. */
 	for (int fd = 2; fd < FDT_COUNT_LIMIT; fd++) {
 		struct file *file = parent->fdt[fd];
-		if (file == NULL)
-			continue;
-		current->fdt[fd] = file_duplicate (file);
+		if (file)
+			current->fdt[fd] = file_duplicate (file);
 	}
 	current->fdx = parent->fdx;
 
-	sema_up (&current->fork_sema);
-
 	process_init ();
+
+	sema_up (&current->fork_sema);
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
@@ -224,17 +226,25 @@ process_exec (void *f_name) {
  * been successfully called for the given TID, returns -1
  * immediately, without waiting. */
 int
-process_wait (tid_t child_tid UNUSED) {
-	struct thread *child = get_child_process (child_tid);
+process_wait (tid_t child_tid) {
+	/* Find the child in the list of shared data structures. */
+	struct wait_status *w_child = get_child_wait_status (child_tid);
 
-	if (child == NULL)
+	/* If none is found, return -1. */
+	if (w_child == NULL)
 		return -1;
-	
-	sema_down (&child->wait_sema); /* Waits until child process terminates. */
-	int exit_status = child->exit_status;
-	list_remove (&child->child_elem);
-	sema_up (&child->free_sema);   /* Wake up child process. */
 
+	/* Wait for the child to die, by downing a semaphore in the shared data. */
+	sema_down (&w_child->wait_sema);
+
+	/* Obtain the child’s exit code from the shared data. */
+	int exit_status = w_child->exit_status;
+
+	/* Destroy the shared data structure and remove it from the list. */
+	list_remove (&w_child->w_elem);
+	free (w_child);
+
+	/*  Return the child's exit code. */
 	return exit_status;
 }
 
@@ -242,6 +252,7 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
+	struct wait_status *w = curr->wait_status;
 
 	for (int fd = 2; fd < FDT_COUNT_LIMIT; fd++)
 		file_close (curr->fdt[fd]);
@@ -250,8 +261,37 @@ process_exit (void) {
 	file_close (curr->running);
 	process_cleanup ();
 
-	sema_up (&curr->wait_sema);   /* Wake up parent process. */
-	sema_down (&curr->free_sema); /* Wait until parent process wake up and get child process's exit_status. */
+	/* Up the semaphore in the data shared with our parent process (if any).
+	 * In some kind of race-free way (such as using a lock and a reference count in the shared data area),
+	 * mark the shared data as unused by us and free it if the parent is also dead. */
+	lock_acquire (&w->lock);
+	w->ref_cnt--;
+	lock_release (&w->lock);
+
+	if (w->ref_cnt == 0)
+		free (w);
+	else
+		sema_up (&w->wait_sema);
+
+	/* Iterate the list of children and, as in the previous step. */
+	struct list_elem *e = list_begin (&curr->children);
+	struct wait_status *w_child;
+
+	while (e != list_end (&curr->children)) {
+		w_child = list_entry (e, struct wait_status, w_elem);
+		/* mark them as no longer used by us */
+		lock_acquire (&w_child->lock);
+		w_child->ref_cnt--;
+		lock_release (&w_child->lock);
+
+		/* free them if the child is also dead. */
+		if (w_child->ref_cnt == 0) {
+			e = list_remove (e);
+			free (w_child);
+		} else {
+			e = list_next (e);
+		}
+	}
 }
 
 /* Free the current process's resources. */
@@ -381,13 +421,14 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Open executable file. */
 	filesys_acquire ();
 	t->running = file = filesys_open (file_name);
-	filesys_release ();
 	if (file == NULL) {
+		filesys_release ();
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
 
 	file_deny_write (file);
+	filesys_release ();
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -745,12 +786,28 @@ argument_stack (struct intr_frame *if_, int argc, char **argv) {
 /* Get process discriptor that have TID. */
 static struct thread *
 get_child_process (int child_tid) {
-	struct list *child_list = &thread_current ()->child_list;
+	struct list *children = &thread_current ()->children;
+	struct wait_status *w;
 
-	for (struct list_elem *e = list_begin (child_list); e != list_end (child_list); e = list_next (e)) {
-		struct thread *t = list_entry (e, struct thread, child_elem);
-		if (t->tid == child_tid)
-			return t;
+	for (struct list_elem *e = list_begin (children); e != list_end (children); e = list_next (e)) {
+		w = list_entry (e, struct wait_status, w_elem);
+		if (w->tid == child_tid)
+			return w->thread;
+	}
+
+	return NULL;
+}
+
+/* Get wait_status of child process that have TID. */
+static struct wait_status *
+get_child_wait_status (int child_tid) {
+	struct list *children = &thread_current ()->children;
+	struct wait_status *w;
+
+	for (struct list_elem *e = list_begin (children); e != list_end (children); e = list_next (e)) {
+		w = list_entry (e, struct wait_status, w_elem);
+		if (w->tid == child_tid)
+			return w;
 	}
 
 	return NULL;

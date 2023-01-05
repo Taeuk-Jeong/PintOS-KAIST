@@ -13,6 +13,7 @@
 #include "intrinsic.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "threads/malloc.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -209,8 +210,22 @@ thread_create (const char *name, int priority,
 	t->fdt[0] = t->fdt[1] = 1; /* Dummy value for standard input/output fd(0/1). */
 	t->fdx = 2;                /* Minimum of usable FD. */
 
+	/* Allocate struct wait_status. */
+	struct wait_status *w;
+
+	t->wait_status = w = calloc (1, sizeof *w);
+	if (w == NULL)
+		return TID_ERROR;
+
+	/* Initialize wait_status. */
+	lock_init (&w->lock);
+	w->ref_cnt = 2;
+	w->tid = tid;
+	sema_init (&w->wait_sema, 0);
+	w->thread = t;
+
 	/* Add new process to child process list of running thread. */
-	list_push_back (&thread_current ()->child_list, &t->child_elem);
+	list_push_back (&thread_current ()->children, &w->w_elem);
 #endif
 
 	/* Call the kernel_thread if it scheduled.
@@ -437,15 +452,10 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
 	t->priority_base = priority;
-	t->wait_on_lock = NULL;
 	list_init (&t->donations);
 #ifdef USERPROG
-	list_init (&t->child_list);
-	t->running = NULL;
-	t->exit_status = 0;
 	sema_init (&t->fork_sema, 0);
-	sema_init (&t->wait_sema, 0);
-	sema_init (&t->free_sema, 0);
+	list_init (&t->children);
 #endif
 	t->magic = THREAD_MAGIC;
 }
@@ -666,8 +676,8 @@ void thread_awake (int64_t ticks) {
 			e = list_remove (e);
 			thread_unblock (t);
 		} else {
-			set_global_ticks (t->wakeup_tick);
 			e = list_next (e);
+			set_global_ticks (t->wakeup_tick);
 		}
 	}
 }

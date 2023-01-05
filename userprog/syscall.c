@@ -8,17 +8,17 @@
 #include "threads/flags.h"
 #include "intrinsic.h"
 
-#include "lib/string.h"
 #include "threads/init.h"
+#include "lib/stdio.h"
+#include "lib/kernel/stdio.h"
+#include "threads/mmu.h"
+#include "threads/vaddr.h"
 #include "filesys/filesys.h"
+#include "filesys/file.h"
+#include "devices/input.h"
+#include "lib/string.h"
 #include "userprog/process.h"
 #include "threads/palloc.h"
-#include "filesys/file.h"
-#include "lib/stdio.h"
-#include "devices/input.h"
-#include "lib/kernel/stdio.h"
-#include "threads/vaddr.h"
-#include "threads/mmu.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -86,7 +86,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			exit (f->R.rdi);
 			break;
 		case SYS_FORK:
-			memcpy (&thread_current ()->parent_if, f, sizeof (struct intr_frame));
+			memcpy (&thread_current ()->user_if, f, sizeof (struct intr_frame));
 			f->R.rax = fork (f->R.rdi);
 			break;
 		case SYS_EXEC:
@@ -140,7 +140,8 @@ halt (void) {
  * Conventionally, a status of 0 indicates success and nonzero values indicate errors. */
 void
 exit (int status) {
-	thread_current ()->exit_status = status;
+	/* Save the exit code in the shared data. */
+	thread_current ()->wait_status->exit_status = status;
 	printf ("%s: exit(%d)\n", thread_name (), status);
 	thread_exit ();
 }
