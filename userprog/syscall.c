@@ -141,7 +141,9 @@ halt (void) {
 void
 exit (int status) {
 	/* Save the exit code in the shared data. */
-	thread_current ()->wait_status->exit_status = status;
+	struct wait_status *w = thread_current ()->wait_status;
+	w->exit_status = status;
+	sema_up (&w->load_sema); // If fork(load) is failed, wake up parent process.
 	printf ("%s: exit(%d)\n", thread_name (), status);
 	thread_exit ();
 }
@@ -353,13 +355,15 @@ fdt_add_fd (struct file *file) {
 		return -1;
 
 	/* Allocate file descriptor. */
-	fdstr = calloc (1, sizeof (struct fd_str));
+	fdstr = calloc (1, sizeof *fdstr);
+	if (fdstr == NULL)
+		return -1;
 
 	/* Set file descriptor. */
+	fdt->open_cnt++;
 	fdstr->fd = fdt->next_fd++;
 	fdstr->file = file;
 	list_push_back (&fdt->fd_list, &fdstr->f_elem);
-	fdt->open_cnt++;
 
 	return fdstr->fd;
 }

@@ -212,8 +212,8 @@ thread_create (const char *name, int priority,
 	lock_init (&w->lock);
 	w->ref_cnt = 2;
 	w->tid = tid;
-	sema_init (&w->wait_sema, 0);
-	w->thread = t;
+	sema_init (&w->load_sema, 0);
+	sema_init (&w->dead_sema, 0);
 
 	/* Add new process to child process list of running thread. */
 	list_push_back (&thread_current ()->children, &w->w_elem);
@@ -446,11 +446,9 @@ init_thread (struct thread *t, const char *name, int priority) {
 	list_init (&t->donations);
 #ifdef USERPROG
 	/* Initialize file descriptor table. */
-	list_init (&t->fdt.fd_list);
 	t->fdt.next_fd = 2; // 0 = STDIN, 1 = STDOUT
 	t->fdt.open_cnt = 2;
-
-	sema_init (&t->fork_sema, 0);
+	list_init (&t->fdt.fd_list);
 	list_init (&t->children);
 #endif
 	t->magic = THREAD_MAGIC;

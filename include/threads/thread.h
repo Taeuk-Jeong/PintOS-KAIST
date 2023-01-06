@@ -5,8 +5,10 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+// #define USERPROG //delete
 #ifdef USERPROG
-#define FILE_OPEN_LIMIT (1<<12) // 4096
+#define FILE_OPEN_LIMIT 1140 //delete
+// #define FILE_OPEN_LIMIT (1<<12) // 4096
 #define FD_LIMIT (1<<16)        // 65356
 #endif
 #include "synch.h"
@@ -54,8 +56,8 @@ struct wait_status {
 	int ref_cnt;                        /* 2 = child and parent both alive, 1 = either child or parent alive, 0 = child and parent both dead. */
 	tid_t tid;                          /* Child thread id. */
 	int exit_status;                    /* Child exit code, if dead. */
-	struct semaphore wait_sema;         /* 1 = child alive, 0 = child dead. */
-	struct thread *thread;              /* Child thread pointer. */
+	struct semaphore load_sema;         /* For waiting for completion of loading. */
+	struct semaphore dead_sema;         /* 1 = child dead, 0 = child alive. */
 };
 
 /* A kernel thread or user process.
@@ -142,8 +144,6 @@ struct thread {
 	struct file *running;               /* Running file. */
 
 	struct intr_frame user_if;          /* User context. */
-	struct semaphore fork_sema;         /* For waiting for completion of fork. */
-
 	struct wait_status *wait_status;    /* This process’s completion state. */
 	struct list children;               /* Completion status of children. */
 #endif
