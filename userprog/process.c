@@ -24,7 +24,7 @@
 #include "vm/vm.h"
 #endif
 
-#define FORK_ERROR 920826
+#define FORK_ERROR 19920826
 
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
@@ -89,8 +89,8 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 		return TID_ERROR;
 
 	struct wait_status *w = get_child_wait_status (child_tid);
-	sema_down (&w->load_sema); // wait until child loads
-	if (w->exit_status == FORK_ERROR) {
+	sema_down (&w->load_sema);          // Wait until child successfully loads.
+	if (w->exit_status == FORK_ERROR) { // If load(fork) is failed, remove form children list.
 		list_remove (&w->w_elem);
 		sema_up (&w->dead_sema);
 		return TID_ERROR;
@@ -277,11 +277,15 @@ process_exit (void) {
 		free (fdstr);
 	}
 
-	file_close (curr->running);
+	/* Destroy the current process's page directory and switch back to the kernel-only page directory. */
 	process_cleanup ();
 
+	/* Close running file. */
+	file_close (curr->running);
+
+	/* If load(fork) is failed, free child's wait_status. */
 	if (w->exit_status == FORK_ERROR) {
-		sema_down (&w->dead_sema);
+		sema_down (&w->dead_sema); // Wait for parent process to get exit status(FORK_ERROR) and remove this process from children list.
 		free (w);
 		return;
 	}
@@ -290,12 +294,12 @@ process_exit (void) {
 	e = list_begin (&curr->children);
 	while (e != list_end (&curr->children)) {
 		w_child = list_entry (e, struct wait_status, w_elem);
-		/* mark them as no longer used by us */
+		/* Mark them as no longer used by us. */
 		lock_acquire (&w_child->lock);
 		w_child->ref_cnt--;
 		lock_release (&w_child->lock);
 
-		/* free them if the child is also dead. */
+		/* Free them if the child is also dead. */
 		if (w_child->ref_cnt == 0) {
 			e = list_remove (e);
 			free (w_child);
@@ -313,7 +317,7 @@ process_exit (void) {
 
     if (w->ref_cnt == 0) // If parent process is already dead without waiting.
         free (w);
-    else // If parent process is still alive.
+    else                 // If parent process is still alive.
         sema_up (&w->dead_sema);
 }
 

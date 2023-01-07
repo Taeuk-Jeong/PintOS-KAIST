@@ -19,6 +19,7 @@
 #include "lib/string.h"
 #include "userprog/process.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -37,6 +38,8 @@ int write (int fd, const void *buffer, unsigned length);
 void seek (int fd, unsigned position);
 unsigned tell (int fd);
 void close (int fd);
+
+int dup2 (int oldfd, int newfd);
 
 static void check_address (void *addr);
 static int fdt_add_fd (struct file *file);
@@ -122,6 +125,9 @@ syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		case SYS_CLOSE:
 			close (f->R.rdi);
+			break;
+		case SYS_DUP2:
+			f->R.rax = dup2 (f->R.rdi, f->R.rsi);
 			break;
 		default:
 			exit (-1);
@@ -310,7 +316,7 @@ tell (int fd) {
 	struct file *f = fdt_get_file (fd);
 
 	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || f == NULL)
-		return;
+		return -1;
 
 	return file_tell (f);
 }
@@ -328,6 +334,12 @@ close (int fd) {
 	fdt_remove_fd (fd);
 }
 
+int
+dup2 (int oldfd, int newfd) {
+	printf ("Need to implementation.\n");
+	exit (-1);
+}
+
 /* Check validation of the pointers in the parameter list.
  * - These pointers must point to user area, not kernel area.
  * - If these pointers don't point the valid address, it is page fault.
@@ -340,7 +352,7 @@ static void
 check_address (void *addr) {
 	struct thread *t = thread_current();
 	if (addr == NULL || !is_user_vaddr (addr) || pml4_get_page (t->pml4, addr) == NULL)
-			exit(-1);
+		exit(-1);
 }
 
 
