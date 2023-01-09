@@ -5,12 +5,6 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
-// #define USERPROG //delete
-#ifdef USERPROG
-#define FILE_OPEN_LIMIT 1140 //delete
-// #define FILE_OPEN_LIMIT (1<<12) // 4096
-#define FD_LIMIT (1<<16)        // 65356
-#endif
 #include "synch.h"
 #ifdef VM
 #include "vm/vm.h"
@@ -34,31 +28,6 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-
-/* File descriptor table. */
-struct fd_table {
-	struct list fd_list;                /* List of 'fd_str'. */
-	int next_fd;                        /* Unused minimum fd. */
-	int open_cnt;                       /* Number of files opened. */
-};
-
-/* File descriptor structure */
-struct fd_str {
-	int fd;                             /* File descriptor. */
-	struct file *file;                  /* An open file. */
-	struct list_elem f_elem;            /* fd_table list element. */
-};
-
-/* Data shared by parent and child process. */
-struct wait_status {
-	struct list_elem w_elem;            /* ‘children’ list element. */
-	struct lock lock;                   /* Protects ref_cnt. */
-	int ref_cnt;                        /* 2 = child and parent both alive, 1 = either child or parent alive, 0 = child and parent both dead. */
-	tid_t tid;                          /* Child thread id. */
-	int exit_status;                    /* Child exit code, if dead. */
-	struct semaphore load_sema;         /* For waiting for completion of loading. */
-	struct semaphore dead_sema;         /* 1 = child dead, 0 = child alive. */
-};
 
 /* A kernel thread or user process.
  *
@@ -139,7 +108,7 @@ struct thread {
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */
 
-	struct fd_table fdt;                /* File descriptor table. */
+	struct list fd_table;               /* File descriptor table(linked list of structure 'fd_str'). */
 
 	struct file *running;               /* Running file. */
 
@@ -155,6 +124,24 @@ struct thread {
 	/* Owned by thread.c. */
 	struct intr_frame tf;               /* Information for switching */
 	unsigned magic;                     /* Detects stack overflow. */
+};
+
+/* File descriptor structure */
+struct fd_str {
+	int fd;                             /* File descriptor. */
+	struct file *file;                  /* An open file. */
+	struct list_elem f_elem;            /* fd_table list element. */
+};
+
+/* Data shared by parent and child process. */
+struct wait_status {
+	struct list_elem w_elem;            /* ‘children’ list element. */
+	struct lock lock;                   /* Protects ref_cnt. */
+	int ref_cnt;                        /* 2 = child and parent both alive, 1 = either child or parent alive, 0 = child and parent both dead. */
+	tid_t tid;                          /* Child thread id. */
+	int exit_status;                    /* Child exit code, if dead. */
+	struct semaphore load_sema;         /* For waiting for completion of loading. */
+	struct semaphore dead_sema;         /* 1 = child dead, 0 = child alive. */
 };
 
 /* If false (default), use round-robin scheduler.

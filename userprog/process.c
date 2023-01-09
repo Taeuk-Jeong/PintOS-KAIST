@@ -167,26 +167,21 @@ __do_fork (void *aux) {
 	if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-	if (parent->fdt.next_fd == FD_LIMIT || parent->fdt.open_cnt == FILE_OPEN_LIMIT)
-		goto error;
+	/* Duplicate file descriptor table of the parent process. */
+	struct list *fd_table_parent = &parent->fd_table;
+	struct fd_str *fd_str_parent;
+	struct list *fd_table_current = &current->fd_table;
+	struct fd_str *fd_str_current;
 
-	/* Duplicate file descriptor table of parent process. */
-	struct list *fd_list_parent = &parent->fdt.fd_list;
-	struct fd_str *fdstr_parent;
-	struct list *fd_list_current = &current->fdt.fd_list;
-	struct fd_str *fdstr_current;
-
-	for (struct list_elem *e = list_begin (fd_list_parent); e != list_end (fd_list_parent); e = list_next (e)) {
-		fdstr_parent = list_entry (e, struct fd_str, f_elem);
-		fdstr_current = calloc (1, sizeof *fdstr_current);
-		if (fdstr_current == NULL)
+	for (struct list_elem *e = list_begin (fd_table_parent); e != list_end (fd_table_parent); e = list_next (e)) {
+		fd_str_parent = list_entry (e, struct fd_str, f_elem);
+		fd_str_current = calloc (1, sizeof *fd_str_current);
+		if (fd_str_current == NULL)
 			goto error;
-		fdstr_current->fd = fdstr_parent->fd;
-		fdstr_current->file = file_duplicate (fdstr_parent->file);
-		list_push_back (fd_list_current, &fdstr_current->f_elem);
+		fd_str_current->fd = fd_str_parent->fd;
+		fd_str_current->file = file_duplicate (fd_str_parent->file);
+		list_push_back (fd_table_current, &fd_str_current->f_elem);
 	}
-	current->fdt.next_fd = parent->fdt.next_fd;
-	current->fdt.open_cnt = parent->fdt.open_cnt;
 
 	sema_up (&current->wait_status->load_sema);
 
@@ -265,16 +260,17 @@ void
 process_exit (void) {
 	struct thread *curr = thread_current ();
 	struct list_elem *e;
-	struct fd_str *fdstr;
+	struct fd_str *fd_str;
 	struct wait_status *w = curr->wait_status;
 	struct wait_status *w_child;
+	int ref_cnt, ref_cnt_child;
 
-	e = list_begin (&curr->fdt.fd_list);
-	while (e != list_end (&curr->fdt.fd_list)) {
-		fdstr = list_entry (e, struct fd_str, f_elem);
+	e = list_begin (&curr->fd_table);
+	while (e != list_end (&curr->fd_table)) {
+		fd_str = list_entry (e, struct fd_str, f_elem);
 		e = list_next (e);
-		file_close (fdstr->file);
-		free (fdstr);
+		file_close (fd_str->file);
+		free (fd_str);
 	}
 
 	/* Destroy the current process's page directory and switch back to the kernel-only page directory. */
@@ -296,11 +292,11 @@ process_exit (void) {
 		w_child = list_entry (e, struct wait_status, w_elem);
 		/* Mark them as no longer used by us. */
 		lock_acquire (&w_child->lock);
-		w_child->ref_cnt--;
+		ref_cnt_child = --w_child->ref_cnt;
 		lock_release (&w_child->lock);
 
 		/* Free them if the child is also dead. */
-		if (w_child->ref_cnt == 0) {
+		if (ref_cnt_child == 0) {
 			e = list_remove (e);
 			free (w_child);
 		} else {
@@ -312,10 +308,10 @@ process_exit (void) {
 	 * In some kind of race-free way (such as using a lock and a reference count in the shared data area),
 	 * mark the shared data as unused by us and free it if the parent is also dead. */
 	lock_acquire (&w->lock);
-	w->ref_cnt--;
+	ref_cnt = --w->ref_cnt;
 	lock_release (&w->lock);
 
-    if (w->ref_cnt == 0) // If parent process is already dead without waiting.
+    if (ref_cnt == 0) // If parent process is already dead without waiting.
         free (w);
     else                 // If parent process is still alive.
         sema_up (&w->dead_sema);

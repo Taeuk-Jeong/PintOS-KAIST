@@ -359,42 +359,40 @@ check_address (void *addr) {
 /* Add file(FILE) to file descriptor table of running thread */
 static int
 fdt_add_fd (struct file *file) {
-	struct fd_table *fdt = &thread_current ()->fdt;
-	struct fd_str *fdstr;
-
-	/* Number of files opened or FD used is limited. */
-	if (fdt->open_cnt == FILE_OPEN_LIMIT || fdt->next_fd == FD_LIMIT)
-		return -1;
+	struct list *fd_table = &thread_current ()->fd_table;
+	struct fd_str *fd_str;
 
 	/* Allocate file descriptor. */
-	fdstr = calloc (1, sizeof *fdstr);
-	if (fdstr == NULL)
+	fd_str = calloc (1, sizeof *fd_str);
+	if (fd_str == NULL)
 		return -1;
 
 	/* Set file descriptor. */
-	fdt->open_cnt++;
-	fdstr->fd = fdt->next_fd++;
-	fdstr->file = file;
-	list_push_back (&fdt->fd_list, &fdstr->f_elem);
+	if (list_empty (fd_table))
+		fd_str->fd = 2;
+	else
+		fd_str->fd = list_entry (list_back (fd_table), struct fd_str, f_elem)->fd + 1;
 
-	return fdstr->fd;
+	fd_str->file = file;
+	list_push_back (fd_table, &fd_str->f_elem);
+
+	return fd_str->fd;
 }
 
 /* Get pointer of file object from file descriptor(FD) */
 static struct file*
 fdt_get_file (int fd) {
-	struct fd_table *fdt = &thread_current ()->fdt;
-	struct list *fd_list = &fdt->fd_list;
-	struct fd_str *fdstr;
+	struct list *fd_table = &thread_current ()->fd_table;
+	struct fd_str *fd_str;
 
-	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd >= fdt->next_fd)
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO)
 		return NULL;
 
-	for (struct list_elem *e = list_begin (fd_list); e != list_end (fd_list); e = list_next (e)) {
-		fdstr = list_entry (e, struct fd_str, f_elem);
-		if (fdstr->fd == fd)
-			return fdstr->file;
-		else if (fdstr->fd > fd)
+	for (struct list_elem *e = list_begin (fd_table); e != list_end (fd_table); e = list_next (e)) {
+		fd_str = list_entry (e, struct fd_str, f_elem);
+		if (fd_str->fd == fd)
+			return fd_str->file;
+		else if (fd_str->fd > fd)
 			return NULL;
 	}
 
@@ -404,21 +402,19 @@ fdt_get_file (int fd) {
 /* When file is closed, set 0 at file descriptor entry at index fd */
 static void
 fdt_remove_fd (int fd) {
-	struct fd_table *fdt = &thread_current ()->fdt;
-	struct list *fd_list = &fdt->fd_list;
-	struct fd_str *fdstr;
+	struct list *fd_table = &thread_current ()->fd_table;
+	struct fd_str *fd_str;
 
-	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd >= fdt->next_fd)
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO)
 		return;
 
-	for (struct list_elem *e = list_begin (fd_list); e != list_end (fd_list); e = list_next (e)) {
-		fdstr = list_entry (e, struct fd_str, f_elem);
-		if (fdstr->fd == fd) {
-			fdt->open_cnt--;
+	for (struct list_elem *e = list_begin (fd_table); e != list_end (fd_table); e = list_next (e)) {
+		fd_str = list_entry (e, struct fd_str, f_elem);
+		if (fd_str->fd == fd) {
 			list_remove (e);
-			free (fdstr);
+			free (fd_str);
 			return;
-		} else if (fdstr->fd > fd) {
+		} else if (fd_str->fd > fd) {
 			return;
 		}
 	}

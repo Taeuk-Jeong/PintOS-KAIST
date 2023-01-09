@@ -445,10 +445,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->priority_base = priority;
 	list_init (&t->donations);
 #ifdef USERPROG
-	/* Initialize file descriptor table. */
-	t->fdt.next_fd = 2; // 0 = STDIN, 1 = STDOUT
-	t->fdt.open_cnt = 2;
-	list_init (&t->fdt.fd_list);
+	list_init (&t->fd_table);
 	list_init (&t->children);
 #endif
 	t->magic = THREAD_MAGIC;
