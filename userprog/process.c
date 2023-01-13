@@ -26,6 +26,14 @@
 
 #define FORK_ERROR 19920826
 
+/* information(arguments) to set up in lazy_load_segment. */
+struct lazy_load_arg {
+	struct file *file;
+	off_t ofs;
+	size_t page_read_bytes;
+	size_t page_zero_bytes;
+};
+
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
@@ -147,7 +155,7 @@ __do_fork (void *aux) {
 	struct thread *parent = (struct thread *) aux;
 	struct thread *current = thread_current ();
 	struct intr_frame *parent_if = &parent->user_if;
-	bool succ = true;
+	bool success = true;
 
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
@@ -188,7 +196,7 @@ __do_fork (void *aux) {
 	process_init ();
 
 	/* Finally, switch to the newly created process. */
-	if (succ)
+	if (success)
 		do_iret (&if_);
 error:
 	exit (FORK_ERROR);
@@ -344,7 +352,7 @@ process_cleanup (void) {
 	}
 }
 
-/* Sets up the CPU for running user code in the nest thread.
+/* Sets up the CPU for running user code in the next thread.
  * This function is called on every context switch. */
 void
 process_activate (struct thread *next) {
@@ -428,7 +436,7 @@ load (const char *file_name, struct intr_frame *if_) {
 	int i;
 
 	int argc = 0;
-	char **argv = palloc_get_page (PAL_USER);
+	char **argv = palloc_get_page (0);
 	if (argv == NULL)
 		goto done;
 
@@ -500,16 +508,14 @@ load (const char *file_name, struct intr_frame *if_) {
 						/* Normal segment.
 						 * Read initial part from disk and zero the rest. */
 						read_bytes = page_offset + phdr.p_filesz;
-						zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
-								- read_bytes);
+						zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE) - read_bytes);
 					} else {
 						/* Entirely zero.
 						 * Don't read anything from disk. */
 						read_bytes = 0;
 						zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
 					}
-					if (!load_segment (file, file_page, (void *) mem_page,
-								read_bytes, zero_bytes, writable))
+					if (!load_segment (file, file_page, (void *) mem_page, read_bytes, zero_bytes, writable))
 						goto done;
 				}
 				else
@@ -636,7 +642,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 
 		/* Add the page to the process's address space. */
 		if (!install_page (upage, kpage, writable)) {
-			printf("fail\n");
+			printf ("fail\n");
 			palloc_free_page (kpage);
 			return false;
 		}
@@ -689,11 +695,31 @@ install_page (void *upage, void *kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
+/* Load the segment from the file.
+ * This function called when the first page fault occurs on address VA.
+ * VA is available when calling this function. */
 static bool
 lazy_load_segment (struct page *page, void *aux) {
-	/* TODO: Load the segment from the file */
-	/* TODO: This called when the first page fault occurs on address VA. */
-	/* TODO: VA is available when calling this function. */
+	struct lazy_load_arg *arg = aux;
+
+	struct file *file = arg->file;
+	off_t ofs = arg->ofs;
+	size_t page_read_bytes = arg->page_read_bytes;
+	size_t page_zero_bytes = arg->page_zero_bytes;
+
+	uint8_t *kpage = page->frame->kva;
+	bool writable = page->writable;
+
+	/* Load this page. */
+	file_seek (file, ofs);
+	if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes) {
+		palloc_free_page (kpage);
+		free (aux);
+		return false;
+	}
+	memset (kpage + page_read_bytes, 0, page_zero_bytes);
+
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -724,16 +750,25 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
+		/* Set up aux to pass information to the lazy_load_segment. */
+		struct lazy_load_arg *aux = malloc (sizeof (struct lazy_load_arg));
+		if (aux == NULL)
+			return false;
+		
+		aux->file = file;
+		aux->ofs = ofs;
+		aux->page_read_bytes = page_read_bytes;
+		aux->page_zero_bytes = page_zero_bytes;
+
+		/* Create the pending page object with initializer. */
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux))
 			return false;
 
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		upage += PGSIZE;
+		ofs += PGSIZE;
 	}
 	return true;
 }
@@ -747,8 +782,11 @@ setup_stack (struct intr_frame *if_) {
 	/* TODO: Map the stack on stack_bottom and claim the page immediately.
 	 * TODO: If success, set the rsp accordingly.
 	 * TODO: You should mark the page is stack. */
-	/* TODO: Your code goes here */
-
+	if (vm_alloc_page (VM_ANON, stack_bottom, true) && vm_claim_page (stack_bottom)) {
+		/* If success, set the rsp accordingly. */
+		if_->rsp = USER_STACK;
+		success = true;
+	}
 	return success;
 }
 #endif /* VM */
@@ -767,7 +805,7 @@ argument_parse (char *file_name, int *argc_ptr, char **argv) {
 /* Pass the arguments to the user program by pushing to the user stack */
 static bool
 argument_stack (struct intr_frame *if_, int argc, char **argv) {
-	char **argv_addr = palloc_get_page (PAL_USER);
+	char **argv_addr = palloc_get_page (0);
 	if (argv_addr == NULL)
 		return false;
 

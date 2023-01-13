@@ -20,6 +20,7 @@
 #include "userprog/process.h"
 #include "threads/palloc.h"
 #include "threads/malloc.h"
+#include "vm/vm.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -351,7 +352,7 @@ dup2 (int oldfd, int newfd) {
 static void
 check_address (void *addr) {
 	struct thread *t = thread_current();
-	if (addr == NULL || !is_user_vaddr (addr) || pml4_get_page (t->pml4, addr) == NULL)
+	if (addr == NULL || !is_user_vaddr (addr) || !spt_find_page (&t->spt, addr))
 		exit(-1);
 }
 

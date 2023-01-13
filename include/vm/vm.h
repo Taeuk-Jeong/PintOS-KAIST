@@ -2,6 +2,7 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include "lib/kernel/hash.h"
 
 enum vm_type {
 	/* page not initialized */
@@ -41,28 +42,29 @@ struct thread;
  * uninit_page, file_page, anon_page, and page cache (project4).
  * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
 struct page {
-	const struct page_operations *operations;
-	void *va;              /* Address in terms of user space */
-	struct frame *frame;   /* Back reference for frame */
+	const struct page_operations *operations;  /* Talbe of function pointer and vm_type. */
+	void *va;                                  /* Address in terms of user space(virtual page). */
+	struct frame *frame;                       /* Back reference for frame(page frame). */
 
-	/* Your implementation */
+	struct hash_elem hash_elem;                /* Hash table element. */
+	bool writable;                             /* 1: writable, 0: read-only. */
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
-		struct uninit_page uninit;
-		struct anon_page anon;
-		struct file_page file;
+		struct uninit_page uninit;             /* Page not initialized. */
+		struct anon_page anon;                 /* Page not related to the file, aka anonymous page. */
+		struct file_page file;                 /* Page that realated to the file. */
 #ifdef EFILESYS
-		struct page_cache page_cache;
+		struct page_cache page_cache;          /* Page that hold the page cache. */
 #endif
 	};
 };
 
 /* The representation of "frame" */
 struct frame {
-	void *kva;
-	struct page *page;
+	void *kva;                                 /* Kernel virtual address(mapped one-to-one to physical memory). */
+	struct page *page;                         /* Page struct include page va allocated to frame. */
 };
 
 /* The function table for page operations.
@@ -85,6 +87,7 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	struct hash pages;
 };
 
 #include "threads/thread.h"
