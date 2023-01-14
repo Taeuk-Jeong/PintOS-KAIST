@@ -16,10 +16,8 @@ enum vm_type {
 
 	/* Bit flags to store state */
 
-	/* Auxillary bit flag marker for store information. You can add more
-	 * markers, until the value is fit in the int. */
-	VM_MARKER_0 = (1 << 3),
-	VM_MARKER_1 = (1 << 4),
+	/* Auxillary bit flag marker for store information. */
+	VM_STACK = (1 << 3),
 
 	/* DO NOT EXCEED THIS VALUE. */
 	VM_MARKER_END = (1 << 31),
@@ -42,7 +40,7 @@ struct thread;
  * uninit_page, file_page, anon_page, and page cache (project4).
  * DO NOT REMOVE/MODIFY PREDEFINED MEMBER OF THIS STRUCTURE. */
 struct page {
-	const struct page_operations *operations;  /* Talbe of function pointer and vm_type. */
+	const struct page_operations *operations;  /* Table of function pointer and vm_type. */
 	void *va;                                  /* Address in terms of user space(virtual page). */
 	struct frame *frame;                       /* Back reference for frame(page frame). */
 

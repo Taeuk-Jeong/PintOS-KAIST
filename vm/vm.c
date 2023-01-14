@@ -5,6 +5,7 @@
 #include "threads/palloc.h"
 #include "userprog/process.h"
 #include "vm/vm.h"
+#include "vm/anon.h"
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
 
@@ -14,6 +15,7 @@ static struct lock vm_lock;
 static unsigned page_hash (const struct hash_elem *, void *aux);
 static bool page_less (const struct hash_elem *, const struct hash_elem *, void *aux);
 static bool install_page (void *upage, void *kpage, bool writable);
+static void page_destructor (struct hash_elem *e, void *aux UNUSED);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -56,7 +58,7 @@ bool
 vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		vm_initializer *init, void *aux) {
 
-	ASSERT (VM_TYPE(type) != VM_UNINIT)
+	ASSERT (VM_TYPE (type) != VM_UNINIT)
 
 	struct supplemental_page_table *spt = &thread_current ()->spt;
 	bool success = false;
@@ -69,7 +71,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		if (page == NULL)
 			goto done;
 
-		switch (VM_TYPE(type)) {
+		switch (VM_TYPE (type)) {
 			case VM_ANON:
 				uninit_new (page, upage, init, type, aux, anon_initializer);
 				break;
@@ -87,7 +89,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 		page->writable = writable;
 
 		/* Insert the page into the spt. */
-		if (spt_insert_page (spt, page) == false) {
+		if (!spt_insert_page (spt, page)) {
 			free (page);
 			goto done;
 		}
@@ -265,13 +267,37 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 		struct supplemental_page_table *src UNUSED) {
+	struct hash_iterator i;
+	hash_first (&i, &src->pages);
+	while (hash_next (&i)) {
+		struct page *p = hash_entry (hash_cur (&i), struct page, hash_elem);
+		enum vm_type type = VM_TYPE (p->operations->type);
+
+		if (type == VM_UNINIT) {
+			size_t size = *((size_t *) p->uninit.aux);
+			void *aux = malloc (size);
+			memcpy (aux, p->uninit.aux, size);
+
+			if (!vm_alloc_page_with_initializer (page_get_type (p), p->va, p->writable, p->uninit.init, aux))
+				return false;
+		} else {
+			if (!vm_alloc_page (type, p->va, p->writable) || !vm_claim_page (p->va))
+				return false;
+
+			struct page *p_child = spt_find_page (dst, p->va);
+			memcpy (p_child->frame->kva, p->frame->kva, PGSIZE);
+		}
+	}
+	return true;
 }
 
 /* Free the resource hold by the supplemental page table */
 void
-supplemental_page_table_kill (struct supplemental_page_table *spt UNUSED) {
-	/* TODO: Destroy all the supplemental_page_table hold by thread and
-	 * TODO: writeback all the modified contents to the storage. */
+supplemental_page_table_kill (struct supplemental_page_table *spt) {
+	/* Destroy all the supplemental_page_table hold by thread. */
+	hash_destroy (&spt->pages, page_destructor);
+
+	/* TODO: Writeback all the modified contents to the storage. */
 }
 
 /* Returns a hash value for page p. */
@@ -308,4 +334,11 @@ install_page (void *upage, void *kpage, bool writable) {
 	 * address, then map our page there. */
 	return (pml4_get_page (t->pml4, upage) == NULL
 		 && pml4_set_page (t->pml4, upage, kpage, writable));
+}
+
+static void
+page_destructor (struct hash_elem *e, void *aux UNUSED) {
+	struct page *page = hash_entry (e, struct page, hash_elem);
+	destroy (page);
+	free (page);
 }

@@ -28,6 +28,7 @@
 
 /* information(arguments) to set up in lazy_load_segment. */
 struct lazy_load_arg {
+	size_t size;
 	struct file *file;
 	off_t ofs;
 	size_t page_read_bytes;
@@ -219,6 +220,10 @@ process_exec (void *f_name) {
 
 	/* We first kill the current context */
 	process_cleanup ();
+
+#ifdef VM
+	supplemental_page_table_init (&thread_current ()->spt);
+#endif
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
@@ -707,14 +712,14 @@ lazy_load_segment (struct page *page, void *aux) {
 	size_t page_read_bytes = arg->page_read_bytes;
 	size_t page_zero_bytes = arg->page_zero_bytes;
 
+	free (aux);
+
 	uint8_t *kpage = page->frame->kva;
-	bool writable = page->writable;
 
 	/* Load this page. */
 	file_seek (file, ofs);
 	if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes) {
 		palloc_free_page (kpage);
-		free (aux);
 		return false;
 	}
 	memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -755,6 +760,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		if (aux == NULL)
 			return false;
 		
+		aux->size = sizeof *aux;
 		aux->file = file;
 		aux->ofs = ofs;
 		aux->page_read_bytes = page_read_bytes;
@@ -779,10 +785,9 @@ setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 
-	/* TODO: Map the stack on stack_bottom and claim the page immediately.
-	 * TODO: If success, set the rsp accordingly.
-	 * TODO: You should mark the page is stack. */
-	if (vm_alloc_page (VM_ANON, stack_bottom, true) && vm_claim_page (stack_bottom)) {
+	/* Map the stack on stack_bottom and claim the page immediately.
+	 * and mark the page is stack. */
+	if (vm_alloc_page (VM_ANON | VM_STACK, stack_bottom, true) && vm_claim_page (stack_bottom)) {
 		/* If success, set the rsp accordingly. */
 		if_->rsp = USER_STACK;
 		success = true;
