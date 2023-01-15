@@ -43,6 +43,7 @@ void close (int fd);
 int dup2 (int oldfd, int newfd);
 
 static void check_address (void *addr);
+static void check_buffer (void *buffer);
 static int fdt_add_fd (struct file *file);
 static struct file* fdt_get_file (int fd);
 static void fdt_remove_fd (int fd);
@@ -79,6 +80,11 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	/* When the system call handler syscall_handler() gets control,
 	 * the system call number is in the rax, and arguments are passed
 	 * with the order %rdi, %rsi, %rdx, %r10, %r8, and %r9. */
+
+#ifdef VM
+	/* Store userland stack pointer. */
+	thread_current ()->rsp = f->rsp;
+#endif
 
 	/* The x86-64 convention for function return values is to place them in the RAX register.
 	   System calls that return a value can do so by modifying the rax member of struct intr_frame. */
@@ -250,7 +256,11 @@ read (int fd, void *buffer, unsigned size) {
 	int size_read;
 	struct file *f;
 
+#ifndef VM
 	check_address (buffer);
+#else
+	check_buffer (buffer);
+#endif
 
 	if (fd == STDIN_FILENO) {
 		for (size_read = 0; size_read < size; size_read++) {
@@ -280,7 +290,11 @@ write (int fd, const void *buffer, unsigned size) {
 	int size_written;
 	struct file *f;
 
+#ifndef VM
 	check_address (buffer);
+#else
+	check_buffer (buffer);
+#endif
 
 	if (fd == STDIN_FILENO) {
 		return -1;
@@ -351,11 +365,20 @@ dup2 (int oldfd, int newfd) {
  * - A pointer to unmapped virtual memory */
 static void
 check_address (void *addr) {
-	struct thread *t = thread_current();
-	if (addr == NULL || !is_user_vaddr (addr) || !spt_find_page (&t->spt, addr))
+	struct thread *t = thread_current ();
+	if (addr == NULL || !is_user_vaddr (addr) || !pml4_get_page (t->pml4, addr))
 		exit(-1);
 }
 
+#ifdef VM
+static void
+check_buffer (void *buffer) {
+	struct thread *t = thread_current ();
+	struct page *p = spt_find_page (&t->spt, buffer);
+	if (buffer == NULL || !is_user_vaddr (buffer) || (p && !p->writable))
+		exit(-1);
+}
+#endif
 
 /* Add file(FILE) to file descriptor table of running thread */
 static int

@@ -185,7 +185,12 @@ vm_get_frame (void) {
 
 /* Growing the stack. */
 static void
-vm_stack_growth (void *addr UNUSED) {
+vm_stack_growth (void *addr) {
+	void *stack_bottom = pg_round_down (addr);
+
+	/* Limit the stack size to be 1MB at maximum. */
+	if (stack_bottom >= ((uint8_t *) USER_STACK) - (1<<20))
+		vm_alloc_page (VM_ANON | VM_STACK, stack_bottom, true);
 }
 
 /* Handle the fault on write_protected page */
@@ -195,9 +200,10 @@ vm_handle_wp (struct page *page UNUSED) {
 
 /* Return true on success */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
-		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
+vm_try_handle_fault (struct intr_frame *f, void *addr,
+		bool user, bool write, bool not_present UNUSED) {
+	struct thread *t = thread_current ();
+	struct supplemental_page_table *spt = &t->spt;
 	struct page *page = NULL;
 
 	/* First checks if it is a valid page fault. By valid, we mean the fault that accesses invalid.
@@ -205,17 +211,19 @@ vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr,
 	 * at the address it was trying to access, or if the page lies within kernel virtual memory,
 	 * or if the access is an attempt to write to a read-only page, then the access is invalid.
 	 * Any invalid access terminates the process and thereby frees all of its resources. */
-	if (user && !is_user_vaddr (addr))
+	if (!is_user_vaddr (addr) || !not_present)
 		return false;
 
-	// if (!not_present) //check
-	// 	return false;
+	/* Stack growth in user or kernel context. */
+	uintptr_t rsp = user ? f->rsp : t->rsp;
+	if (USER_STACK > addr && addr >= (uint8_t *) rsp - sizeof (uintptr_t *))
+		vm_stack_growth (addr);
 
-	// if (write && !page->writable) //check
-	// 	return false;
-
-	page = spt_find_page (&thread_current ()->spt, addr);
+	page = spt_find_page (spt, addr);
 	if (page == NULL)
+		exit (-1);
+
+	if (write && !page->writable)
 		return false;
 
 	/* If it is a bogus fault, you load some contents into the page and return control to the user program.
@@ -265,8 +273,8 @@ supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
 
 /* Copy supplemental page table from src to dst */
 bool
-supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
-		struct supplemental_page_table *src UNUSED) {
+supplemental_page_table_copy (struct supplemental_page_table *dst,
+		struct supplemental_page_table *src) {
 	struct hash_iterator i;
 	hash_first (&i, &src->pages);
 	while (hash_next (&i)) {
