@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include "threads/palloc.h"
 #include "lib/kernel/hash.h"
+#include "threads/mmu.h"
 
 enum vm_type {
 	/* page not initialized */
@@ -47,6 +48,8 @@ struct page {
 	struct hash_elem hash_elem;                /* Hash table element. */
 	bool writable;                             /* 1: writable, 0: read-only. */
 
+	struct list_elem mp_elem;                  /* List element of 'mmap_page_list' */
+
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
@@ -85,7 +88,15 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
-	struct hash pages;
+	struct hash pages;                         /* Hash table that include pages allocated. */
+	struct list mmap_file_list;                /* Lisf of file-backed pages returned by mmap function. */
+};
+
+struct mmap_file {
+	void *addr;                                /* Return value from mmap function(start of mapping). */
+	struct file *file;                         /* Mapped file pointer. */ 
+	struct list_elem mf_elem;                  /* List element of 'mmap_file_list' */
+	struct list mmap_page_list;                /* List of file-backed pages mmaped by calling mmap funciton. */
 };
 
 #include "threads/thread.h"

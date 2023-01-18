@@ -15,7 +15,7 @@ static struct lock vm_lock;
 static unsigned page_hash (const struct hash_elem *, void *aux);
 static bool page_less (const struct hash_elem *, const struct hash_elem *, void *aux);
 static bool install_page (void *upage, void *kpage, bool writable);
-static void page_destructor (struct hash_elem *e, void *aux UNUSED);
+static void page_destructor (struct hash_elem *e, void *aux);
 
 /* Initializes the virtual memory subsystem by invoking each subsystem's
  * intialize codes. */
@@ -164,13 +164,13 @@ vm_get_frame (void) {
 	struct frame *frame = malloc (sizeof *frame);
 
 	ASSERT (frame != NULL);
-	
+
 	/* Gets a new physical page from the user pool by calling palloc_get_page.
 	 * When successfully got a page from the user pool, also allocates a frame,
 	 * initialize its members, and returns it. */
 	void *kva = palloc_get_page (PAL_USER);
 	if (kva == NULL) {
-		PANIC ("todo");
+		PANIC ("Swap In/Out 구현 필요!");
 		free (frame);
 		frame = vm_evict_frame ();
 	} else {
@@ -221,7 +221,7 @@ vm_try_handle_fault (struct intr_frame *f, void *addr,
 
 	page = spt_find_page (spt, addr);
 	if (page == NULL)
-		exit (-1);
+		return false;
 
 	if (write && !page->writable)
 		return false;
@@ -267,45 +267,110 @@ vm_do_claim_page (struct page *page) {
 
 /* Initialize new supplemental page table */
 void
-supplemental_page_table_init (struct supplemental_page_table *spt UNUSED) {
+supplemental_page_table_init (struct supplemental_page_table *spt) {
 	hash_init (&spt->pages, page_hash, page_less, NULL);
+	list_init (&spt->mmap_file_list);
 }
 
 /* Copy supplemental page table from src to dst */
 bool
 supplemental_page_table_copy (struct supplemental_page_table *dst,
 		struct supplemental_page_table *src) {
+	struct thread *t = thread_current ();
+
 	struct hash_iterator i;
 	hash_first (&i, &src->pages);
 	while (hash_next (&i)) {
-		struct page *p = hash_entry (hash_cur (&i), struct page, hash_elem);
-		enum vm_type type = VM_TYPE (p->operations->type);
+		struct page *p_src = hash_entry (hash_cur (&i), struct page, hash_elem);
+		enum vm_type type = VM_TYPE (p_src->operations->type);
 
 		if (type == VM_UNINIT) {
-			size_t size = *((size_t *) p->uninit.aux);
+			size_t size = *((size_t *) p_src->uninit.aux);
 			void *aux = malloc (size);
-			memcpy (aux, p->uninit.aux, size);
+			if (aux == NULL)
+				return false;
 
-			if (!vm_alloc_page_with_initializer (page_get_type (p), p->va, p->writable, p->uninit.init, aux))
+			memcpy (aux, p_src->uninit.aux, size);
+
+			type = page_get_type (p_src);
+			if (type == VM_ANON)
+				((struct lazy_load_arg *) aux)->file = t->running;
+
+			if (!vm_alloc_page_with_initializer (type, p_src->va, p_src->writable, p_src->uninit.init, aux))
 				return false;
 		} else {
-			if (!vm_alloc_page (type, p->va, p->writable) || !vm_claim_page (p->va))
+			if (!vm_alloc_page (type, p_src->va, p_src->writable) || !vm_claim_page (p_src->va))
 				return false;
 
-			struct page *p_child = spt_find_page (dst, p->va);
-			memcpy (p_child->frame->kva, p->frame->kva, PGSIZE);
+			struct page *p_dst = spt_find_page (dst, p_src->va);
+			if (p_dst == NULL)
+				return false;
+
+			memcpy (p_dst->frame->kva, p_src->frame->kva, PGSIZE);
 		}
 	}
+
+	struct list *mf_list_src = &src->mmap_file_list;
+	struct list *mf_list_dst = &dst->mmap_file_list;
+	struct mmap_file *mf_src, *mf_dst;
+	struct list *mp_list_src, *mp_list_dst;
+
+	for (struct list_elem *mf_e = list_begin (mf_list_src); mf_e != list_end (mf_list_src); mf_e = list_next (mf_e)) {
+		mf_src = list_entry (mf_e, struct mmap_file, mf_elem);
+		mf_dst = malloc (sizeof *mf_dst);
+		if (mf_dst == NULL)
+			return false;
+
+		struct file *file = file_reopen (mf_src->file);
+		if (file == NULL)
+			return false;
+
+		mf_dst->addr = mf_src->addr;
+		mf_dst->file = file;
+		list_push_back (mf_list_dst, &mf_dst->mf_elem);
+
+		mp_list_src = &mf_src->mmap_page_list;
+		mp_list_dst = &mf_dst->mmap_page_list;
+		list_init (mp_list_dst);
+
+		for (struct list_elem *mp_e = list_begin (mp_list_src); mp_e != list_end (mp_list_src); mp_e = list_next (mp_e)) {
+			struct page *p_src = list_entry (mp_e, struct page, mp_elem);
+			struct page *p_dst = spt_find_page (dst, p_src->va);
+			if (p_dst == NULL)
+				return false;
+
+			enum vm_type type = VM_TYPE (p_dst->operations->type);
+
+			if (type == VM_UNINIT)
+				((struct lazy_load_arg *) p_dst->uninit.aux)->file = file;
+			else if (type == VM_FILE)
+				p_dst->file.file = file;
+
+			list_push_back (mp_list_dst, &p_dst->mp_elem);
+		}
+	}
+
 	return true;
 }
 
 /* Free the resource hold by the supplemental page table */
 void
 supplemental_page_table_kill (struct supplemental_page_table *spt) {
-	/* Destroy all the supplemental_page_table hold by thread. */
-	hash_destroy (&spt->pages, page_destructor);
+	struct hash *pages = &spt->pages;
 
-	/* TODO: Writeback all the modified contents to the storage. */
+	/* Threads-tests. */
+	if (!pages->buckets)
+		return;
+
+	/* All mappings are implicitly unmapped when a process exits. */
+	struct list *mf_list = &spt->mmap_file_list;
+	while (!list_empty (mf_list)) {
+		struct mmap_file *m = list_entry (list_begin (mf_list), struct mmap_file, mf_elem);
+		munmap (m->addr);
+	}
+
+	/* Destroy all the supplemental_page_table hold by thread. */
+	hash_destroy (pages, page_destructor);
 }
 
 /* Returns a hash value for page p. */
@@ -347,6 +412,5 @@ install_page (void *upage, void *kpage, bool writable) {
 static void
 page_destructor (struct hash_elem *e, void *aux UNUSED) {
 	struct page *page = hash_entry (e, struct page, hash_elem);
-	destroy (page);
-	free (page);
+	vm_dealloc_page (page);
 }

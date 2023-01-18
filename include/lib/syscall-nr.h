@@ -32,7 +32,7 @@ enum {
 	SYS_SYMLINK,                /* Returns the inode number for a fd. */
 
 	/* Extra for Project 2 */
-	SYS_DUP2,                   /* Duplicate the file descriptor */
+	SYS_DUP2,                   /* Duplicate the file descriptor. */
 
 	SYS_MOUNT,
 	SYS_UMOUNT,

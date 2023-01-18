@@ -39,11 +39,17 @@ int write (int fd, const void *buffer, unsigned length);
 void seek (int fd, unsigned position);
 unsigned tell (int fd);
 void close (int fd);
-
 int dup2 (int oldfd, int newfd);
+#ifdef VM
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap (void *addr);
+#endif
 
 static void check_address (void *addr);
-static void check_buffer (void *buffer);
+#ifdef VM
+static void check_buffer (void *buffer, unsigned size);
+static bool check_mmap (void *addr, size_t length, int fd, struct file *file, off_t offset);
+#endif
 static int fdt_add_fd (struct file *file);
 static struct file* fdt_get_file (int fd);
 static void fdt_remove_fd (int fd);
@@ -89,53 +95,61 @@ syscall_handler (struct intr_frame *f UNUSED) {
 	/* The x86-64 convention for function return values is to place them in the RAX register.
 	   System calls that return a value can do so by modifying the rax member of struct intr_frame. */
 	switch (f->R.rax) {
-		case SYS_HALT:
+		case SYS_HALT:        /* Halt the operating system. */
 			halt ();
 			break;
-		case SYS_EXIT:
+		case SYS_EXIT:        /* Terminate this process. */
 			exit (f->R.rdi);
 			break;
-		case SYS_FORK:
+		case SYS_FORK:        /* Clone current process. */
 			memcpy (&thread_current ()->user_if, f, sizeof (struct intr_frame));
 			f->R.rax = fork (f->R.rdi);
 			break;
-		case SYS_EXEC:
+		case SYS_EXEC:        /* Switch current process. */
 			if (exec (f->R.rdi) == -1)
 				exit (-1);
 			break;
-		case SYS_WAIT:
+		case SYS_WAIT:        /* Wait for a child process to die. */
 			f->R.rax = wait (f->R.rdi);
 			break;
-		case SYS_CREATE:
+		case SYS_CREATE:      /* Create a file. */
 			f->R.rax = create (f->R.rdi, f->R.rsi);
 			break;
-		case SYS_REMOVE:
+		case SYS_REMOVE:      /* Delete a file. */
 			f->R.rax = remove (f->R.rdi);
 			break;
-		case SYS_OPEN:
+		case SYS_OPEN:        /* Open a file. */
 			f->R.rax = open (f->R.rdi);
 			break;
-		case SYS_FILESIZE:
+		case SYS_FILESIZE:    /* Obtain a file's size. */
 			f->R.rax = filesize (f->R.rdi);
 			break;
-		case SYS_READ:
+		case SYS_READ:        /* Read from a file. */
 			f->R.rax = read (f->R.rdi, f->R.rsi, f->R.rdx);
 			break;
-		case SYS_WRITE:
+		case SYS_WRITE:       /* Write to a file. */
 			f->R.rax = write (f->R.rdi, f->R.rsi, f->R.rdx);
 			break;
-		case SYS_SEEK:
+		case SYS_SEEK:        /* Change position in a file. */
 			seek (f->R.rdi, f->R.rsi);
 			break;
-		case SYS_TELL:
+		case SYS_TELL:        /* Report current position in a file. */
 			f->R.rax = tell (f->R.rdi);
 			break;
-		case SYS_CLOSE:
+		case SYS_CLOSE:       /* Close a file. */
 			close (f->R.rdi);
 			break;
-		case SYS_DUP2:
+		case SYS_DUP2:        /* Duplicate the file descriptor. */
 			f->R.rax = dup2 (f->R.rdi, f->R.rsi);
 			break;
+#ifdef VM
+		case SYS_MMAP:        /* Map a file into memory. */
+			f->R.rax = mmap (f->R.rdi, f->R.rsi, f->R.rdx, f->R.r10, f->R.r8);
+			break;
+		case SYS_MUNMAP:      /* Remove a memory mapping. */
+			munmap (f->R.rdi);
+			break;
+#endif
 		default:
 			exit (-1);
 			break;
@@ -256,10 +270,9 @@ read (int fd, void *buffer, unsigned size) {
 	int size_read;
 	struct file *f;
 
-#ifndef VM
 	check_address (buffer);
-#else
-	check_buffer (buffer);
+#ifdef VM
+	check_buffer (buffer, size);
 #endif
 
 	if (fd == STDIN_FILENO) {
@@ -290,11 +303,7 @@ write (int fd, const void *buffer, unsigned size) {
 	int size_written;
 	struct file *f;
 
-#ifndef VM
 	check_address (buffer);
-#else
-	check_buffer (buffer);
-#endif
 
 	if (fd == STDIN_FILENO) {
 		return -1;
@@ -355,6 +364,24 @@ dup2 (int oldfd, int newfd) {
 	exit (-1);
 }
 
+#ifdef VM
+void *
+mmap (void *addr, size_t length, int writable, int fd, off_t offset) {
+	struct file *file = fdt_get_file (fd);
+
+	if(!check_mmap (addr, length, fd, file, offset))
+		return NULL;
+
+	return do_mmap (addr, length, writable, file, offset);
+}
+
+void
+munmap (void *addr) {
+	do_munmap (addr);
+}
+#endif
+
+#ifndef VM
 /* Check validation of the pointers in the parameter list.
  * - These pointers must point to user area, not kernel area.
  * - If these pointers don't point the valid address, it is page fault.
@@ -366,17 +393,58 @@ dup2 (int oldfd, int newfd) {
 static void
 check_address (void *addr) {
 	struct thread *t = thread_current ();
-	if (addr == NULL || !is_user_vaddr (addr) || !pml4_get_page (t->pml4, addr))
+	if (addr == NULL || !is_user_vaddr (addr) || pml4_get_page (t->pml4, addr) == NULL)
+		exit(-1);
+}
+#else
+static void
+check_address (void *addr) {
+	struct thread *t = thread_current ();
+	if (addr == NULL || !is_user_vaddr (addr))
 		exit(-1);
 }
 
-#ifdef VM
 static void
-check_buffer (void *buffer) {
+check_buffer (void *buffer, unsigned size) {
 	struct thread *t = thread_current ();
-	struct page *p = spt_find_page (&t->spt, buffer);
-	if (buffer == NULL || !is_user_vaddr (buffer) || (p && !p->writable))
-		exit(-1);
+
+	for (void *upage = pg_round_down(buffer); upage < buffer + size; upage += PGSIZE) {
+		struct page *p = spt_find_page (&t->spt, upage);
+		if (p && !p->writable)
+			exit(-1);
+	}
+}
+
+static bool
+check_mmap (void *addr, size_t length, int fd, struct file *file, off_t offset) {
+	/* The file descriptors representing console input and output are not mappable. */
+	if (fd == STDIN_FILENO || fd == STDOUT_FILENO || file == NULL)
+		return NULL;
+
+	/* A call to mmap may fail if the file opened as fd has a length of zero bytes. It must fail if addr is not page-aligned. */
+	if (file_length (file) == 0 || pg_ofs (addr))
+		return false;
+
+	/* If addr is 0, it must fail, because some Pintos code assumes virtual page 0 is not mapped.
+	 * mmap should also fail when length is zero.*/
+	if (addr == 0 || length == 0)
+		return false;
+
+	/* Tries to mmap an invalid offset, which must either fail silently or terminate the process with exit code -1. */
+	if (offset % PGSIZE != 0)
+		return false;
+
+	/* Verifies that mapping over the kernel is disallowed. */
+	if (!is_user_vaddr (addr) || !is_user_vaddr (addr + length) || !is_user_vaddr (length))
+		return false;
+
+	/* It must fail if the range of pages mapped overlaps any existing set of mapped pages,
+	 * including the stack or pages mapped at executable load time. */
+	for (void *upage = addr; upage < addr + length; upage += PGSIZE)
+		if (spt_find_page (&thread_current ()->spt, upage))
+			return false;
+
+	return true;
 }
 #endif
 

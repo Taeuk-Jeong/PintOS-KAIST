@@ -26,15 +26,6 @@
 
 #define FORK_ERROR 19920826
 
-/* information(arguments) to set up in lazy_load_segment. */
-struct lazy_load_arg {
-	size_t size;
-	struct file *file;
-	off_t ofs;
-	size_t page_read_bytes;
-	size_t page_zero_bytes;
-};
-
 static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
@@ -165,6 +156,10 @@ __do_fork (void *aux) {
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
 	if (current->pml4 == NULL)
+		goto error;
+
+	current->running = file_reopen (parent->running);
+	if (current->running == NULL)
 		goto error;
 
 	process_activate (current);
@@ -454,6 +449,9 @@ load (const char *file_name, struct intr_frame *if_) {
 		goto done;
 	process_activate (thread_current ());
 
+	if (t->running)
+		file_close (t->running);
+
 	/* Open executable file. */
 	filesys_acquire ();
 	t->running = file = filesys_open (file_name);
@@ -703,16 +701,22 @@ install_page (void *upage, void *kpage, bool writable) {
 /* Load the segment from the file.
  * This function called when the first page fault occurs on address VA.
  * VA is available when calling this function. */
-static bool
+bool
 lazy_load_segment (struct page *page, void *aux) {
 	struct lazy_load_arg *arg = aux;
 
 	struct file *file = arg->file;
-	off_t ofs = arg->ofs;
+	off_t ofs = arg->offset;
 	size_t page_read_bytes = arg->page_read_bytes;
-	size_t page_zero_bytes = arg->page_zero_bytes;
 
 	free (aux);
+
+	if (page_get_type (page) == VM_FILE) {
+		struct file_page *file_page = &page->file;
+		file_page->file = file;
+		file_page->offset = ofs;
+		file_page->page_read_bytes = page_read_bytes;
+	}
 
 	uint8_t *kpage = page->frame->kva;
 
@@ -722,7 +726,7 @@ lazy_load_segment (struct page *page, void *aux) {
 		palloc_free_page (kpage);
 		return false;
 	}
-	memset (kpage + page_read_bytes, 0, page_zero_bytes);
+	memset (kpage + page_read_bytes, 0, PGSIZE - page_read_bytes);
 
 	return true;
 }
@@ -756,19 +760,20 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
 		/* Set up aux to pass information to the lazy_load_segment. */
-		struct lazy_load_arg *aux = malloc (sizeof (struct lazy_load_arg));
+		struct lazy_load_arg *aux = malloc (sizeof *aux);
 		if (aux == NULL)
 			return false;
 		
 		aux->size = sizeof *aux;
 		aux->file = file;
-		aux->ofs = ofs;
+		aux->offset = ofs;
 		aux->page_read_bytes = page_read_bytes;
-		aux->page_zero_bytes = page_zero_bytes;
 
 		/* Create the pending page object with initializer. */
-		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux))
+		if (!vm_alloc_page_with_initializer (VM_ANON, upage, writable, lazy_load_segment, aux)) {
+			free (aux);
 			return false;
+		}
 
 		/* Advance. */
 		read_bytes -= page_read_bytes;

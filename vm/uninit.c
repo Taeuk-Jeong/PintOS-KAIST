@@ -64,6 +64,5 @@ static void
 uninit_destroy (struct page *page) {
 	struct uninit_page *uninit = &page->uninit;
 	
-	if (uninit->aux)
-		free (uninit->aux);
+	free (uninit->aux);
 }
