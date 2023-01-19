@@ -47,8 +47,8 @@ struct page {
 
 	struct hash_elem hash_elem;                /* Hash table element. */
 	bool writable;                             /* 1: writable, 0: read-only. */
-
 	struct list_elem mp_elem;                  /* List element of 'mmap_page_list' */
+	struct thread *owner;                      /* Thread that own(made) the page. */
 
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
@@ -66,6 +66,7 @@ struct page {
 struct frame {
 	void *kva;                                 /* Kernel virtual address(mapped one-to-one to physical memory). */
 	struct page *page;                         /* Page struct include page va allocated to frame. */
+	struct list_elem f_elem;                   /* List element of frame table('frames'). */
 };
 
 /* The function table for page operations.
@@ -120,5 +121,8 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
+
+void frames_lock_acquire (void);
+void frames_lock_release (void);
 
 #endif  /* VM_VM_H */

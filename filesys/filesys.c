@@ -107,12 +107,12 @@ filesys_remove (const char *name) {
 }
 
 void
-filesys_acquire (void) {
+filesys_lock_acquire (void) {
 	lock_acquire (&filesys_lock);
 }
 
 void
-filesys_release (void) {
+filesys_lock_release (void) {
 	lock_release (&filesys_lock);
 }
 

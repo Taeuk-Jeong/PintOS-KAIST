@@ -9,7 +9,14 @@
 #include "vm/inspect.h"
 #include "lib/kernel/hash.h"
 
-static struct lock vm_lock;
+/* Lock(mutex) for modifying spt(hash table). */
+static struct lock pages_lock;
+
+/* Lock(mutex) for frame table. */
+static struct lock frames_lock;
+
+/* Frame table. */
+static struct list frames;
 
 /* hash function and a comparison function using va as the key. */
 static unsigned page_hash (const struct hash_elem *, void *aux);
@@ -29,7 +36,9 @@ vm_init (void) {
 	register_inspect_intr ();
 	/* DO NOT MODIFY UPPER LINES. */
 	/* TODO: Your code goes here. */
-	lock_init (&vm_lock);
+	lock_init (&pages_lock);
+	lock_init (&frames_lock);
+	list_init (&frames);
 }
 
 /* Get the type of the page. This function is useful if you want to know the
@@ -60,7 +69,8 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 
 	ASSERT (VM_TYPE (type) != VM_UNINIT)
 
-	struct supplemental_page_table *spt = &thread_current ()->spt;
+	struct thread *t = thread_current ();
+	struct supplemental_page_table *spt = &t->spt;
 	bool success = false;
 
 	/* Check wheter the upage is already occupied or not. */
@@ -87,6 +97,7 @@ vm_alloc_page_with_initializer (enum vm_type type, void *upage, bool writable,
 				NOT_REACHED ();
 		}
 		page->writable = writable;
+		page->owner = t;
 
 		/* Insert the page into the spt. */
 		if (!spt_insert_page (spt, page)) {
@@ -115,9 +126,9 @@ bool
 spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 	bool success = false;
 
-	lock_acquire (&vm_lock);
+	lock_acquire (&pages_lock);
 	struct list_elem *e = hash_insert (&spt->pages, &page->hash_elem);
-	lock_release (&vm_lock);
+	lock_release (&pages_lock);
 
 	if (e == NULL)
 		success = true;
@@ -128,9 +139,9 @@ spt_insert_page (struct supplemental_page_table *spt, struct page *page) {
 /* Delete PAGE from spt and dealloc PAGE. */
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
-	lock_acquire (&vm_lock);
+	lock_acquire (&pages_lock);
 	struct list_elem *e = hash_delete (&spt->pages, &page->hash_elem);
-	lock_release (&vm_lock);
+	lock_release (&pages_lock);
 
 	vm_dealloc_page (page);
 }
@@ -138,10 +149,15 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page) {
 /* Get the struct frame, that will be evicted. */
 static struct frame *
 vm_get_victim (void) {
-	struct frame *victim = NULL;
-	/* TODO: The policy for eviction is up to you. */
+	if (list_empty (&frames))
+		PANIC ("vm_get_victim failed");
 
-	return victim;
+	/* FIFO policy for eviction(page replacement). */
+	frames_lock_acquire ();
+	struct frame *frame = list_entry (list_pop_back (&frames), struct frame, f_elem);
+	frames_lock_release ();
+
+	return frame;
 }
 
 /* Evict(swap out) one page and return the corresponding(evicted) frame.
@@ -161,19 +177,19 @@ vm_evict_frame (void) {
  * space.*/
 static struct frame *
 vm_get_frame (void) {
-	struct frame *frame = malloc (sizeof *frame);
-
-	ASSERT (frame != NULL);
+	struct frame *frame = NULL;
 
 	/* Gets a new physical page from the user pool by calling palloc_get_page.
 	 * When successfully got a page from the user pool, also allocates a frame,
 	 * initialize its members, and returns it. */
 	void *kva = palloc_get_page (PAL_USER);
 	if (kva == NULL) {
-		PANIC ("Swap In/Out 구현 필요!");
-		free (frame);
 		frame = vm_evict_frame ();
+		if (frame == NULL)
+			PANIC ("Swap out failed");
 	} else {
+		frame = malloc (sizeof *frame);
+		ASSERT (frame != NULL);
 		frame->kva = kva;
 	}
 
@@ -259,10 +275,15 @@ vm_do_claim_page (struct page *page) {
 	page->frame = frame;
 
 	/* Insert page table entry to map page's VA to frame's PA. */
-	if (install_page (page->va, frame->kva, page->writable))
+	if (install_page (page->va, frame->kva, page->writable)) {
+		frames_lock_acquire ();
+		list_push_front (&frames, &frame->f_elem);
+		frames_lock_release ();
+		
 		return swap_in (page, frame->kva);
-	else
+	} else {
 		return false;
+	}
 }
 
 /* Initialize new supplemental page table */
@@ -413,4 +434,14 @@ static void
 page_destructor (struct hash_elem *e, void *aux UNUSED) {
 	struct page *page = hash_entry (e, struct page, hash_elem);
 	vm_dealloc_page (page);
+}
+
+void
+frames_lock_acquire (void) {
+	lock_acquire (&frames_lock);
+
+}
+void
+frames_lock_release (void) {
+	lock_release (&frames_lock);
 }

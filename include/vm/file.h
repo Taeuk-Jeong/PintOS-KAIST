@@ -7,7 +7,7 @@ struct page;
 enum vm_type;
 
 struct file_page {
-    enum vm_type type;
+    enum vm_type type;        /* Page type that include VM_MARKER. */
 	struct file *file;
 	off_t offset;
 	size_t page_read_bytes;

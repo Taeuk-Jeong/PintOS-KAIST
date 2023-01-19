@@ -38,13 +38,41 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva UNUSED)
 /* Swap in the page by read contents from the file. */
 static bool
 file_backed_swap_in (struct page *page, void *kva) {
-	struct file_page *file_page UNUSED = &page->file;
+	struct file_page *file_page = &page->file;
+
+	struct file *file = file_page->file;
+	off_t ofs = file_page->offset;
+	size_t page_read_bytes = file_page->page_read_bytes;
+
+	file_seek (file, ofs);
+	if (file_read (file, kva, page_read_bytes) != (int) page_read_bytes) {
+		palloc_free_page (kva);
+		return false;
+	}
+	memset (kva + page_read_bytes, 0, PGSIZE - page_read_bytes);
+
+	return true;
 }
 
 /* Swap out the page by writeback contents to the file. */
 static bool
 file_backed_swap_out (struct page *page) {
-	struct file_page *file_page UNUSED = &page->file;
+	struct thread *t = page->owner;
+	void *upage = page->va;
+	struct file_page *file_page = &page->file;
+
+	if (pml4_get_page (t->pml4, upage)) {
+		if (pml4_is_dirty (t->pml4, upage)) {
+			if (file_write_at (file_page->file, upage, file_page->page_read_bytes, file_page->offset) \
+				!= file_page->page_read_bytes)
+				return false;
+
+			pml4_set_dirty (t->pml4, upage, 0);
+		}
+		pml4_clear_page (t->pml4, upage);
+	}
+
+	return true;
 }
 
 /* Destroys the file backed page. If the content is dirty, make sure you write back the changes into the file.
@@ -64,6 +92,15 @@ file_backed_destroy (struct page *page) {
 			pml4_set_dirty (t->pml4, upage, 0);
 		}
 		pml4_clear_page (t->pml4, upage);
+
+		struct frame *frame = page->frame;
+		
+		frames_lock_acquire ();
+		list_remove (&frame->f_elem);
+		frames_lock_release ();
+
+		palloc_free_page (frame->kva);
+		free (frame);
 	}
 }
 
@@ -158,14 +195,8 @@ do_munmap (void *addr) {
 		return;
 
 	struct list *mp_list = &m->mmap_page_list;
-	struct list_elem *mp_e = list_begin (mp_list);
-	while (mp_e != list_end (mp_list)) {
-		struct page *p = list_entry (mp_e, struct page, mp_elem);
-
-		if (page_get_type (p) != VM_FILE)
-			break;
-
-		mp_e = list_remove (mp_e);
+	while (!list_empty (mp_list)) {
+		struct page *p = list_entry (list_pop_front (mp_list), struct page, mp_elem);
 		spt_remove_page (spt, p);
 	}
 
