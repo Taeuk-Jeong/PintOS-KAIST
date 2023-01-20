@@ -100,9 +100,9 @@ anon_destroy (struct page *page) {
 
 		struct frame *frame = page->frame;
 
-		frames_lock_acquire ();
+		lock_acquire (&frames_lock);
 		list_remove (&frame->f_elem);
-		frames_lock_release ();
+		lock_release (&frames_lock);
 		
 		palloc_free_page (frame->kva);
 		free (frame);

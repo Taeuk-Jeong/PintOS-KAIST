@@ -7,12 +7,11 @@
 #include "filesys/inode.h"
 #include "filesys/directory.h"
 #include "devices/disk.h"
-#include "threads/synch.h"
 
 /* The disk that contains the file system. */
 struct disk *filesys_disk;
 
-static struct lock filesys_lock;
+struct lock filesys_lock;
 
 static void do_format (void);
 
@@ -104,16 +103,6 @@ filesys_remove (const char *name) {
 	dir_close (dir);
 
 	return success;
-}
-
-void
-filesys_lock_acquire (void) {
-	lock_acquire (&filesys_lock);
-}
-
-void
-filesys_lock_release (void) {
-	lock_release (&filesys_lock);
 }
 
 /* Formats the file system. */

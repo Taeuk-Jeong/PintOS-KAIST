@@ -453,16 +453,16 @@ load (const char *file_name, struct intr_frame *if_) {
 		file_close (t->running);
 
 	/* Open executable file. */
-	filesys_lock_acquire ();
+	lock_acquire (&filesys_lock);
 	t->running = file = filesys_open (file_name);
 	if (file == NULL) {
-		filesys_lock_release ();
+		lock_release (&filesys_lock);
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
 
 	file_deny_write (file);
-	filesys_lock_release ();
+	lock_release (&filesys_lock);
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr

@@ -13,7 +13,7 @@
 static struct lock pages_lock;
 
 /* Lock(mutex) for frame table. */
-static struct lock frames_lock;
+struct lock frames_lock;
 
 /* Frame table. */
 static struct list frames;
@@ -153,9 +153,9 @@ vm_get_victim (void) {
 		PANIC ("vm_get_victim failed");
 
 	/* FIFO policy for eviction(page replacement). */
-	frames_lock_acquire ();
+	lock_acquire (&frames_lock);
 	struct frame *frame = list_entry (list_pop_back (&frames), struct frame, f_elem);
-	frames_lock_release ();
+	lock_release (&frames_lock);
 
 	return frame;
 }
@@ -276,9 +276,9 @@ vm_do_claim_page (struct page *page) {
 
 	/* Insert page table entry to map page's VA to frame's PA. */
 	if (install_page (page->va, frame->kva, page->writable)) {
-		frames_lock_acquire ();
+		lock_acquire (&frames_lock);
 		list_push_front (&frames, &frame->f_elem);
-		frames_lock_release ();
+		lock_release (&frames_lock);
 		
 		return swap_in (page, frame->kva);
 	} else {
@@ -434,14 +434,4 @@ static void
 page_destructor (struct hash_elem *e, void *aux UNUSED) {
 	struct page *page = hash_entry (e, struct page, hash_elem);
 	vm_dealloc_page (page);
-}
-
-void
-frames_lock_acquire (void) {
-	lock_acquire (&frames_lock);
-
-}
-void
-frames_lock_release (void) {
-	lock_release (&frames_lock);
 }

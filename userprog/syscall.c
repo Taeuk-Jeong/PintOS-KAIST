@@ -180,9 +180,9 @@ bool
 create (const char *file, unsigned initial_size) {
 	check_address (file);
 
-	filesys_lock_acquire ();
+	lock_acquire (&filesys_lock);
 	bool result = filesys_create (file, initial_size);
-	filesys_lock_release ();
+	lock_release (&filesys_lock);
 
 	return result;
 }
@@ -223,9 +223,9 @@ bool
 remove (const char *file) {
 	check_address (file);
 
-	filesys_lock_acquire ();
+	lock_acquire (&filesys_lock);
 	bool result = filesys_remove (file);
-	filesys_lock_release ();
+	lock_release (&filesys_lock);
 
 	return result;
 }
@@ -237,9 +237,10 @@ int
 open (const char *file) {
 	check_address (file);
 
-	filesys_lock_acquire ();
+	lock_acquire (&filesys_lock);
 	struct file *f = filesys_open (file);
-	filesys_lock_release ();
+	lock_release (&filesys_lock);
+
 	if (f == NULL)
 		return -1;
 
@@ -354,7 +355,10 @@ close (int fd) {
 	if (f == NULL)
 		return;
 
+	lock_acquire (&filesys_lock);
 	file_close (f);
+	lock_release (&filesys_lock);
+
 	fdt_remove_fd (fd);
 }
 

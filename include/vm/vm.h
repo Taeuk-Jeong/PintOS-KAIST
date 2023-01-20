@@ -100,6 +100,8 @@ struct mmap_file {
 	struct list mmap_page_list;                /* List of file-backed pages mmaped by calling mmap funciton. */
 };
 
+extern struct lock frames_lock;
+
 #include "threads/thread.h"
 void supplemental_page_table_init (struct supplemental_page_table *spt);
 bool supplemental_page_table_copy (struct supplemental_page_table *dst,
@@ -121,8 +123,5 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
 enum vm_type page_get_type (struct page *page);
-
-void frames_lock_acquire (void);
-void frames_lock_release (void);
 
 #endif  /* VM_VM_H */
